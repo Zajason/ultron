@@ -41,6 +41,8 @@ from .audio.aec import EchoCanceller
 from .audio.devices import transports
 from .audio.vad import SileroVAD
 from .conversation import UI, Conversation
+from .wakeword import MODELS as WAKE_MODELS
+from .wakeword import WakeWordDetector
 from .listen import PushToTalk
 from .metrics import TurnLog, TurnMetrics, percentile
 from .persona import FILLER_LINES
@@ -240,11 +242,18 @@ def _terminal_ui() -> UI:
     def note(text: str) -> None:
         print(f"\n{DIM}{text}{RESET}", flush=True)
 
-    return UI(partial, heard, reply_start, lambda s: print(s, end="", flush=True), reply_done, note)
+    def sleep() -> None:
+        print(f"\n{DIM}asleep · say \"Ultron\"{RESET}", flush=True)
+
+    def wake(score: float) -> None:
+        print(f"{BOLD}● awake{RESET} {DIM}(score {score:.2f}){RESET}", flush=True)
+
+    return UI(partial, heard, reply_start, lambda s: print(s, end="", flush=True), reply_done, note, sleep, wake)
 
 
-async def live(cfg: Config) -> None:
-    """Hands-free: speak whenever you like; speaking over Ultron stops him."""
+async def live(cfg: Config, wake: bool = False, daemon: bool = False) -> None:
+    """Hands-free: speak whenever you like; speaking over Ultron stops him. With wake=True he sleeps
+    until he hears "Ultron". daemon=True: no keyboard (launchd), stop with SIGTERM."""
     mic = _open_mic(cfg)
     speaker = _build_speaker(cfg)
 
@@ -260,17 +269,43 @@ async def live(cfg: Config) -> None:
     ready.append("echo cancel on" if aec else "echo cancel off (headphones)")
     eager = cfg.stt.eager_eot_threshold > 0
     ready.append(f"early start {'on' if eager else 'off'}")
+    detector = None
+    if wake:
+        if not (WAKE_MODELS / "ultron_wakeword.onnx").exists():
+            sys.exit("No wake-word model yet: uv run --group train python scripts/train_wakeword.py all")
+        w = cfg.wake
+        detector = WakeWordDetector(threshold=w.threshold, patience=w.patience)
+        ready.append(f"wake word on (threshold {w.threshold})")
     print(f"{DIM}{' · '.join(ready)}{RESET}")
-    print(f"{DIM}Listening. Just talk. Type q then Enter to quit.{RESET}")
+    if not daemon:
+        print(f"{DIM}{'Say \"Ultron\" to wake him.' if wake else 'Listening. Just talk.'} Type q then Enter to quit.{RESET}")
+    ui = _terminal_ui()
+    if wake and cfg.wake.chime:
+        shown_wake = ui.wake
+
+        def wake_with_chime(score: float) -> None:
+            speaker.chime()
+            shown_wake(score)
+
+        ui.wake = wake_with_chime
     convo = Conversation(brain, speaker, mic, DeepgramFlux(cfg.stt, _require("DEEPGRAM_API_KEY")),
-                         _vad(cfg, mic), aec, eager, cfg.stt.frame_ms, TurnLog(cfg.turns_log), _terminal_ui())
+                         _vad(cfg, mic), aec, eager, cfg.stt.frame_ms, TurnLog(cfg.turns_log), ui,
+                         wake=detector, idle_sleep_s=cfg.wake.idle_sleep_s)
 
     async def quit_on_q():
         while (await asyncio.to_thread(input)).strip().lower() not in ("q", "quit", "/quit"):
             pass
         convo.stop()
 
-    q = asyncio.create_task(quit_on_q())
+    if daemon:
+        import signal
+
+        loop = asyncio.get_running_loop()
+        for sig in (signal.SIGTERM, signal.SIGINT):
+            loop.add_signal_handler(sig, convo.stop)
+        q = asyncio.create_task(asyncio.sleep(0))
+    else:
+        q = asyncio.create_task(quit_on_q())
     try:
         await convo.run()
     finally:
@@ -633,6 +668,8 @@ def main() -> None:
     sub = p.add_subparsers(dest="cmd", required=True)
     lv = sub.add_parser("live", help="hands-free voice conversation")
     lv.add_argument("--device", help="input device name (or part of it) or index; default: automatic")
+    lv.add_argument("--wake", action="store_true", help='sleep until "Ultron" is heard')
+    lv.add_argument("--daemon", action="store_true", help="no keyboard input (for launchd); stop with SIGTERM")
     bv = sub.add_parser("bench-v2v", help="voice-to-voice latency via the replay harness")
     bv.add_argument("--rounds", type=int, default=1)
     bv.add_argument("--no-eager", action="store_true", help="disable the early start on EagerEndOfTurn")
@@ -675,7 +712,7 @@ def main() -> None:
             case "live":
                 _require("ANTHROPIC_API_KEY")
                 try:
-                    asyncio.run(live(cfg))
+                    asyncio.run(live(cfg, wake=args.wake, daemon=args.daemon))
                 except Exception as e:
                     _log_error("ultron live", e)
                     sys.exit(1)

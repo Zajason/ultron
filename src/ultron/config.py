@@ -62,6 +62,14 @@ class STTConfig:
 
 
 @dataclass(frozen=True)
+class WakeConfig:
+    threshold: float = 0.5
+    patience: int = 1  # consecutive 80 ms frames above threshold
+    idle_sleep_s: float = 10.0  # back to sleep after this long without speech or a reply
+    chime: bool = True
+
+
+@dataclass(frozen=True)
 class VADConfig:
     threshold: float = 0.5
     start_ms: int = 64
@@ -101,6 +109,7 @@ class Config:
     tts: TTSConfig = field(default_factory=TTSConfig)
     stt: STTConfig = field(default_factory=STTConfig)
     vad: VADConfig = field(default_factory=VADConfig)
+    wake: WakeConfig = field(default_factory=WakeConfig)
     audio: AudioConfig = field(default_factory=AudioConfig)
     fx: FXConfig = field(default_factory=FXConfig)
     turns_log: Path = Path("~/.ultron/turns.jsonl")
@@ -148,6 +157,7 @@ def load_config(root: Path | None = None) -> Config:
         stt=STTConfig(**{k: tuple(v) if isinstance(v, list) else v for k, v in raw.get("stt", {}).items()}),
         audio=AudioConfig(**raw.get("audio", {})),
         vad=VADConfig(**raw.get("vad", {})),
+        wake=WakeConfig(**raw.get("wake", {})),
         fx=FXConfig(**raw.get("fx", {})),
         turns_log=_path(raw.get("metrics", {}).get("turns_log", "~/.ultron/turns.jsonl")),
     )

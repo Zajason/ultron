@@ -29,6 +29,9 @@ from .audio.vad import SileroVAD, VADEvent
 from .backends import DeepgramFlux, STTStream, TurnEvent
 from .brain import Brain
 from .metrics import TurnLog, TurnMetrics
+from .wakeword import WakeWordDetector
+
+_WAKE_RE = re.compile(r"\b(ultron|ul ?tron|ultra ?tron|altron)\b", re.I)
 
 
 @dataclass
@@ -53,6 +56,8 @@ class UI:
     reply_text: Callable[[str], None] = lambda s: None
     reply_done: Callable[[TurnMetrics, bool], None] = lambda m, interrupted: None
     note: Callable[[str], None] = lambda s: None
+    sleep: Callable[[], None] = lambda: None
+    wake: Callable[[float], None] = lambda score: None
 
 
 def _norm(s: str) -> str:
@@ -62,7 +67,8 @@ def _norm(s: str) -> str:
 class Conversation:
     def __init__(self, brain: Brain, speaker: Speaker, mic: MicInput, stt: DeepgramFlux,
                  vad: SileroVAD, aec: EchoCanceller | None, eager: bool, frame_ms: int = 80,
-                 turn_log: TurnLog | None = None, ui: UI | None = None) -> None:
+                 turn_log: TurnLog | None = None, ui: UI | None = None,
+                 wake: WakeWordDetector | None = None, idle_sleep_s: float = 10.0) -> None:
         self.brain, self.speaker, self.mic, self.stt = brain, speaker, mic, stt
         self.vad, self.aec, self.eager = vad, aec, eager
         self.frame_samples = mic.out_rate * frame_ms // 1000
@@ -75,11 +81,24 @@ class Conversation:
         self._stop = asyncio.Event()
         self.turns_done = 0
         self.errors: list[BaseException] = []
+        # Wake word: while asleep nothing is sent to STT. The last 2 s are kept so the request that
+        # follows "Ultron" (often in the same breath) reaches STT once we wake.
+        self.wake = wake
+        self.awake = wake is None
+        self.idle_sleep_s = idle_sleep_s
+        self._verify = False  # first turn after a wake must actually contain the wake word
+        self._last_activity = time.perf_counter()
+        self._ring = np.zeros(0, np.float32)
+        self._stream_ready = asyncio.Event()
+        self.false_wakes = 0
 
     # -- lifecycle ------------------------------------------------------------------------------
 
     async def run(self) -> None:
-        self.stream = await self.stt.open(ptt=False)
+        if self.awake:
+            await self._open_stream()
+        else:
+            self.ui.sleep()
         self.mic.start()
         tasks = [asyncio.create_task(self._audio_loop()), asyncio.create_task(self._turn_loop())]
         try:
@@ -89,11 +108,41 @@ class Conversation:
                 t.cancel()
             self._cancel_reply()
             self.mic.stop()
-            with contextlib.suppress(Exception):
-                await self.stream.close()
+            await self._close_stream()
 
     def stop(self) -> None:
         self._stop.set()
+
+    async def _open_stream(self) -> None:
+        self.stream = await self.stt.open(ptt=False)
+        self._stream_ready.set()
+
+    async def _close_stream(self) -> None:
+        self._stream_ready.clear()
+        stream, self.stream = self.stream, None
+        if stream is not None:
+            with contextlib.suppress(Exception):
+                await stream.close()
+
+    async def _wake_up(self, score: float) -> None:
+        self.ui.wake(score)
+        self.awake = True
+        self._verify = True
+        self._last_activity = time.perf_counter()
+        await self._open_stream()
+        # Send the buffered audio first: "Ultron" itself (for verification) and whatever followed.
+        backlog = self._ring[-int(1.5 * self.mic.out_rate):]
+        for i in range(0, backlog.size, self.frame_samples):
+            await self.stream.send(to_linear16(backlog[i : i + self.frame_samples]))
+
+    async def _go_to_sleep(self, false_wake: bool = False) -> None:
+        self.awake = False
+        self._verify = False
+        if false_wake:
+            self.false_wakes += 1
+        await self._close_stream()
+        self.vad.reset()
+        self.ui.sleep()
 
     # -- audio: AEC -> VAD -> Flux --------------------------------------------------------------
 
@@ -102,8 +151,21 @@ class Conversation:
         async for block in self.mic.blocks():
             now = time.perf_counter()
             clean = self.aec.process(block) if self.aec else block
+            if self.wake is not None:
+                self._ring = np.concatenate([self._ring, clean])[-2 * self.mic.out_rate :]
+                if not self.awake:
+                    if (hit := self.wake.push(clean)) is not None:
+                        await self._wake_up(hit.score)
+                        pending = np.zeros(0, np.float32)
+                    continue
+                if self.reply is None and not self.vad.speaking and now - self._last_activity > self.idle_sleep_s:
+                    await self._go_to_sleep(false_wake=self._verify)
+                    continue
             for ev in self.vad.process(clean, now):
+                self._last_activity = now
                 self._on_vad(ev)
+            if self.vad.speaking or self.reply is not None:
+                self._last_activity = now
             pending = np.concatenate([pending, clean])
             while pending.size >= self.frame_samples:
                 await self.stream.send(to_linear16(pending[: self.frame_samples]))
@@ -130,14 +192,28 @@ class Conversation:
 
     async def _turn_loop(self) -> None:
         while True:
-            ev = await self.stream.events.get()
+            await self._stream_ready.wait()
+            stream = self.stream
+            ev = await stream.events.get()
+            if stream is not self.stream:
+                continue  # closed for sleep while we waited
             if ev.kind in ("error", "closed"):
+                if not self.awake:
+                    continue
                 self.ui.note(f"STT {ev.kind}: {ev.detail}; reconnecting")
-                self.stream = await self.stt.open(ptt=False)
+                await self._open_stream()
                 continue
             self._on_turn(ev)
 
     def _on_turn(self, ev: TurnEvent) -> None:
+        if self._verify and ev.kind in ("eager", "end") and ev.transcript:
+            if not _WAKE_RE.search(ev.transcript):
+                if ev.kind == "end":  # the detector misfired: no reply, straight back to sleep
+                    self.ui.note(f"(not for me: {ev.transcript!r})")
+                    asyncio.create_task(self._go_to_sleep(false_wake=True))
+                return
+            if ev.kind == "end":
+                self._verify = False
         if ev.kind == "update" and ev.transcript:
             self.ui.partial(ev.transcript)
         elif ev.kind == "eager" and self.eager and ev.transcript:

@@ -160,6 +160,15 @@ class Speaker:
         self._emit("filler", self.render(self.fillers[line]))
         return line
 
+    def chime(self) -> None:
+        """Two soft tones: 'I'm listening'. Generated, so it costs nothing and plays instantly."""
+        sr = self.out.sample_rate
+        tones = []
+        for hz in (660, 990):
+            t = np.arange(int(0.07 * sr)) / sr
+            tones.append(0.12 * np.sin(2 * np.pi * hz * t) * np.hanning(t.size))
+        self.out.write(np.concatenate(tones).astype(np.float32))
+
     def render(self, audio: np.ndarray) -> np.ndarray:
         """TTS-rate audio -> output-rate audio, with varispeed and FX."""
         audio = self.resampler.process(audio)

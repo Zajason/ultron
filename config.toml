@@ -58,6 +58,12 @@ avoid_bluetooth_mic = true              # a Bluetooth mic forces headset mode; u
 aec = "auto"                            # echo cancellation: auto = on unless output is Bluetooth headphones; on; off
 latency_ms = 10                         # buffer hint; reported output latency ~38 ms on built-in speakers
 
+[wake]                                  # `ultron live --wake`
+threshold = 0.5                         # detector score to wake; the first transcript must also contain "Ultron"
+patience = 1                            # consecutive 80 ms frames above threshold
+idle_sleep_s = 10                       # back to sleep after this much silence
+chime = true                            # short tone when he wakes
+
 [vad]                                   # Silero, for barge-in
 threshold = 0.5
 start_ms = 64                           # voiced audio needed before Ultron stops talking

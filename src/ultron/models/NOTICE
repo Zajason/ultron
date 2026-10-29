@@ -1,0 +1,11 @@
+silero_vad.onnx
+  Silero VAD v6, MIT License (see SILERO_VAD_LICENSE). https://github.com/snakers4/silero-vad
+
+melspectrogram.onnx, embedding_model.onnx
+  From openWakeWord v0.5.1 (https://github.com/dscripka/openWakeWord), Apache License 2.0.
+  The embedding model is a re-implementation of Google's speech_embedding
+  (https://tfhub.dev/google/speech_embedding/1), Apache License 2.0.
+
+ultron_wakeword.onnx
+  Trained for this project by scripts/train_wakeword.py on synthetic speech and on
+  openWakeWord's validation_set_features (derived from ACAV100M; personal, non-commercial use).
