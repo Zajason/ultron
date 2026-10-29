@@ -69,7 +69,23 @@ def read_wav(path: Path) -> np.ndarray:
 
 
 def slug(s: str) -> str:
-    return re.sub(r"[^a-z0-9]+", "-", s.lower()).strip("-")
+    # Keep end punctuation in the name: "Ultron", "Ultron?" and "Ultron!" are different intonations.
+    tail = {"?": "-q", "!": "-x", ".": "-p"}.get(s.strip()[-1:], "")
+    return re.sub(r"[^a-z0-9]+", "-", s.lower()).strip("-") + tail
+
+
+def say(voice: str, rate: int, text: str, out: Path) -> bool:
+    """macOS `say` occasionally hangs forever; time out, retry once, then skip the clip."""
+    out.parent.mkdir(parents=True, exist_ok=True)
+    for _ in range(2):
+        try:
+            subprocess.run(["say", "-v", voice, "-r", str(rate), "-o", str(out), "--file-format=WAVE",
+                            "--data-format=LEI16@16000", text], check=True, timeout=20)
+            return True
+        except (subprocess.TimeoutExpired, subprocess.CalledProcessError):
+            out.unlink(missing_ok=True)
+    print(f"  skipped: {voice} @ {rate}: {text!r}", flush=True)
+    return False
 
 
 def mac_voices() -> list[str]:
@@ -90,9 +106,7 @@ def gen_mac() -> None:
                     f = CLIPS / kind / f"mac-{slug(voice)}-{slug(text)}-{rate}.wav"
                     if f.exists():
                         continue
-                    f.parent.mkdir(parents=True, exist_ok=True)
-                    subprocess.run(["say", "-v", voice, "-r", str(rate), "-o", str(f), "--file-format=WAVE",
-                                    "--data-format=LEI16@16000", text], check=True)
+                    say(voice, rate, text, f)
     print(f"macOS voices done: {len(mac_voices())} voices")
 
 
@@ -106,9 +120,7 @@ def gen_speech(per_voice: int = 2) -> None:
             if f.exists():
                 continue
             text = " ".join(rng.choice(words) for _ in range(45))
-            f.parent.mkdir(parents=True, exist_ok=True)
-            subprocess.run(["say", "-v", voice, "-r", str(rng.choice((160, 190, 220))), "-o", str(f),
-                            "--file-format=WAVE", "--data-format=LEI16@16000", text], check=True)
+            say(voice, rng.choice((160, 190, 220)), text, f)
     print(f"speech negatives done: {len(list((CLIPS / 'speech').glob('*.wav')))} clips")
 
 
@@ -336,7 +348,7 @@ class MLP:
         z, _ = self.forward((x.reshape(len(x), -1) - self.mu) / self.sd)
         return 1 / (1 + np.exp(-np.clip(z, -30, 30)))
 
-    def step(self, x, y, w, lr, wd=1e-4):
+    def step(self, x, y, w, lr, wd=1e-3):
         z, (x, z1, a1, z2, a2) = self.forward(x)
         prob = 1 / (1 + np.exp(-np.clip(z, -30, 30)))
         g = (prob - y) * w / w.sum()
@@ -379,25 +391,55 @@ class MLP:
         onnx.save(model, str(path))
 
 
-def train(epochs: int, hidden: int) -> None:
-    d = np.load(WORK / "features.npz")
-    gen = generic_windows("train", stride=4)
-    pos, neg = d["pos_tr"], np.concatenate([d["neg_tr"], d["speech_tr"], gen])
-    x = np.concatenate([pos, neg]).reshape(len(pos) + len(neg), -1)
-    y = np.concatenate([np.ones(len(pos)), np.zeros(len(neg))]).astype(np.float32)
-    # Look-alikes count extra: they're exactly the mistakes we care about.
-    w = np.concatenate([np.full(len(pos), len(neg) / len(pos) * 0.5), np.full(len(d["neg_tr"]), 4.0),
-                        np.full(len(d["speech_tr"]), 2.0), np.ones(len(gen))]).astype(np.float32)
-    model = MLP(x.shape[1], hidden)
+def generic_scores(model: "MLP", stride: int = 1, batch: int = 20000) -> tuple[np.ndarray, np.ndarray]:
+    """Score every live-style window of the training part of the generic set without materialising
+    all of them at once (stride 1 would be ~2 GB)."""
+    x = np.asarray(np.load(NEG_FEATURES, mmap_mode="r")[: int(481345 * 0.8)])
+    idx = np.arange(0, x.shape[0] - WINDOW, stride)
+    scores = np.empty(len(idx), np.float32)
+    for i in range(0, len(idx), batch):
+        sel = idx[i : i + batch]
+        scores[i : i + len(sel)] = model.predict(np.stack([x[j : j + WINDOW] for j in sel]))
+    return idx, scores
+
+
+def fit(x, y, w, hidden, epochs, wd, seed=0) -> "MLP":
+    model = MLP(x.shape[1], hidden, seed)
     model.mu, model.sd = x.mean(0), x.std(0) + 1e-3
     xs = (x - model.mu) / model.sd
-    rng = np.random.default_rng(0)
-    print(f"training on {len(pos)} positive, {len(d['neg_tr'])} look-alike, {len(d['speech_tr'])} speech, {len(gen)} generic windows")
+    rng = np.random.default_rng(seed)
     for ep in range(epochs):
         order = rng.permutation(len(xs))
         lr = 1e-3 * (0.5 ** (ep // max(1, epochs // 3)))
-        losses = [model.step(xs[b], y[b], w[b], lr) for b in np.array_split(order, max(1, len(order) // 512))]
-        print(f"  epoch {ep + 1}/{epochs}  loss {np.mean(losses):.4f}")
+        losses = [model.step(xs[b], y[b], w[b], lr, wd) for b in np.array_split(order, max(1, len(order) // 512))]
+        print(f"  epoch {ep + 1}/{epochs}  loss {np.mean(losses):.4f}", flush=True)
+    return model
+
+
+def train(epochs: int, hidden: int, wd: float = 1e-3, rounds: int = 2) -> None:
+    """Train, then mine the generic audio for windows the model wrongly accepts and retrain with
+    them weighted up (hard negatives), `rounds` times."""
+    d = np.load(WORK / "features.npz")
+    gen = generic_windows("train", stride=4)
+    raw = np.asarray(np.load(NEG_FEATURES, mmap_mode="r")[: int(481345 * 0.8)])
+    hard = np.zeros((0, WINDOW, 96), np.float32)
+    for rnd in range(rounds + 1):
+        pos, negs = d["pos_tr"], [d["neg_tr"], d["speech_tr"], gen, hard]
+        x = np.concatenate([pos, *negs]).reshape(len(pos) + sum(map(len, negs)), -1)
+        y = np.concatenate([np.ones(len(pos)), np.zeros(x.shape[0] - len(pos))]).astype(np.float32)
+        n_neg = x.shape[0] - len(pos)
+        w = np.concatenate([np.full(len(pos), n_neg / len(pos) * 0.5), np.full(len(d["neg_tr"]), 4.0),
+                            np.full(len(d["speech_tr"]), 2.0), np.ones(len(gen)), np.full(len(hard), 8.0)]).astype(np.float32)
+        print(f"round {rnd}: {len(pos)} positive, {len(d['neg_tr'])} look-alike, {len(d['speech_tr'])} speech, "
+              f"{len(gen)} generic, {len(hard)} hard negatives")
+        model = fit(x, y, w, hidden, epochs, wd)
+        if rnd == rounds:
+            break
+        idx, sc = generic_scores(model)
+        bad = idx[sc >= 0.2]
+        print(f"  {len(bad)} generic windows score >= 0.2 ({len(bad) / len(idx):.3%}); adding as hard negatives")
+        new = np.stack([raw[j : j + WINDOW] for j in bad]) if len(bad) else np.zeros((0, WINDOW, 96), np.float32)
+        hard = np.concatenate([hard, new])[-60000:]
     out = MODELS / "ultron_wakeword.onnx"
     model.export(out)
     print(f"saved {out} ({out.stat().st_size / 1e3:.0f} kB)")
@@ -431,6 +473,8 @@ def main() -> None:
     ap.add_argument("--per-neg", type=int, default=3)
     ap.add_argument("--epochs", type=int, default=12)
     ap.add_argument("--hidden", type=int, default=64)
+    ap.add_argument("--wd", type=float, default=1e-3, help="weight decay")
+    ap.add_argument("--rounds", type=int, default=2, help="hard-negative mining rounds")
     a = ap.parse_args()
     stages = ["generate", "features", "train", "eval"] if "all" in a.stages else a.stages
     WORK.mkdir(parents=True, exist_ok=True)
@@ -446,7 +490,7 @@ def main() -> None:
         elif s == "features":
             build_features(a.per_pos, a.per_neg)
         elif s == "train":
-            train(a.epochs, a.hidden)
+            train(a.epochs, a.hidden, a.wd, a.rounds)
         elif s == "eval":
             evaluate()
 

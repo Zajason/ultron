@@ -142,6 +142,8 @@ class Conversation:
             self.false_wakes += 1
         await self._close_stream()
         self.vad.reset()
+        if self.wake is not None:
+            self.wake.reset()
         self.ui.sleep()
 
     # -- audio: AEC -> VAD -> Flux --------------------------------------------------------------

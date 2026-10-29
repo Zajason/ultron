@@ -63,7 +63,7 @@ class STTConfig:
 
 @dataclass(frozen=True)
 class WakeConfig:
-    threshold: float = 0.5
+    threshold: float = 0.8
     patience: int = 1  # consecutive 80 ms frames above threshold
     idle_sleep_s: float = 10.0  # back to sleep after this long without speech or a reply
     chime: bool = True

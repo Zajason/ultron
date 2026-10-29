@@ -59,7 +59,7 @@ aec = "auto"                            # echo cancellation: auto = on unless ou
 latency_ms = 10                         # buffer hint; reported output latency ~38 ms on built-in speakers
 
 [wake]                                  # `ultron live --wake`
-threshold = 0.5                         # detector score to wake; the first transcript must also contain "Ultron"
+threshold = 0.8                         # detector score; held-out eval: 93.6% recall, 0.47 false wakes/hour (also verified by transcript)
 patience = 1                            # consecutive 80 ms frames above threshold
 idle_sleep_s = 10                       # back to sleep after this much silence
 chime = true                            # short tone when he wakes

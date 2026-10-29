@@ -121,6 +121,13 @@ class WakeWordDetector:
         self._last = -1e9
         self.score = 0.0
 
+    def reset(self) -> None:
+        """Forget buffered audio. Must happen whenever detection resumes after a pause, or the
+        'Ultron' that woke us last time is still in the window and wakes us again."""
+        self.stream = StreamingFeatures(self.features)
+        self._above = 0
+        self.score = 0.0
+
     def push(self, audio: np.ndarray) -> Detection | None:
         hit = None
         n = self.stream.push(audio * 32767)
