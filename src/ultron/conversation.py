@@ -40,6 +40,7 @@ class Reply:
     checkpoint: tuple[int, bool] = (0, False)
     t0: float = 0.0
     metrics: TurnMetrics | None = None
+    events: dict[str, float] = field(default_factory=dict)  # perf_counter of turn events (for breakdowns)
     shown: list[str] = field(default_factory=list)  # reply text produced before commit, shown on commit
 
 
@@ -141,6 +142,7 @@ class Conversation:
             self.ui.partial(ev.transcript)
         elif ev.kind == "eager" and self.eager and ev.transcript:
             self._start_reply(ev.transcript, speculative=True)
+            self.reply.events["eager"] = ev.t
         elif ev.kind == "resumed":
             if self.reply and self.reply.speculative and not self.reply.committed.is_set():
                 self._cancel_reply(rollback=True)
@@ -149,11 +151,13 @@ class Conversation:
             if r and r.speculative and not r.committed.is_set():
                 if _norm(r.transcript) == _norm(ev.transcript):
                     self.ui.heard(ev.transcript)
+                    r.events["end"] = ev.t
                     self._commit(r)
                     return
                 self._cancel_reply(rollback=True)
             self.ui.heard(ev.transcript)
             self._start_reply(ev.transcript, speculative=False)
+            self.reply.events["end"] = ev.t
 
     def _turn_t0(self) -> float:
         # Voice-to-voice is timed from the end of the user's last voiced audio (VAD), not from when
@@ -230,6 +234,8 @@ class Conversation:
                 if t is not None and t >= r.t0:
                     m.marks[name] = round((t - r.t0) * 1000, 1)
             m.marks["speculative"] = float(r.speculative)
+            for name, t in r.events.items():
+                m.marks[f"{name}_event"] = round((t - r.t0) * 1000, 1)
             if self.turn_log:
                 self.turn_log.write(m)
             self.ui.reply_done(m, interrupted)

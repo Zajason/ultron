@@ -256,6 +256,7 @@ class Brain:
         self, model: str, m: TurnMetrics, rnd: int, emit: OnText, tool_block: OnEvent, no_tools: bool = False
     ):
         t_req = time.perf_counter()
+        m.mark("llm_request")
         ttft = None
         extra = {"tool_choice": {"type": "none"}} if no_tools else {}
         async with self.client.messages.stream(

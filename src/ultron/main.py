@@ -299,7 +299,7 @@ async def bench_v2v(cfg: Config, rounds: int) -> None:
     eager = cfg.stt.eager_eot_threshold > 0
     convo = Conversation(brain, speaker, mic, DeepgramFlux(cfg.stt, _require("DEEPGRAM_API_KEY")),
                          _vad(cfg, mic), None, eager, cfg.stt.frame_ms)
-    rows: dict[str, list[float]] = {k: [] for k in ("eot", "ttft", "tts", "v2v", "v2v_haiku", "v2v_sonnet")}
+    rows: dict[str, list[float]] = {k: [] for k in ("eager", "end", "req", "ttft", "tts", "v2v", "v2v_haiku", "v2v_sonnet")}
     spec = 0
     run = asyncio.create_task(convo.run())
     await asyncio.sleep(1.0)
@@ -329,11 +329,15 @@ async def bench_v2v(cfg: Config, rounds: int) -> None:
                 v2v = fa + shift
                 rows["v2v"].append(v2v)
                 rows["v2v_haiku" if "haiku" in m.model else "v2v_sonnet"].append(v2v)
-                if "first_token" in m.marks:
-                    rows["ttft"].append(m.marks["first_token"] + shift)
+                for key, mark in (("ttft", "first_token"), ("eager", "eager_event"), ("end", "end_event"),
+                                  ("req", "llm_request"), ("tts", "tts_first_byte")):
+                    if mark in m.marks:
+                        rows[key].append(m.marks[mark] + shift)
                 spec += int(m.marks.get("speculative", 0))
-                print(f"{DIM}{name:<44} {m.model.removeprefix('claude-')[:6]:<7} v2v {v2v:5.0f}ms  "
-                      f"{'eager ' if m.marks.get('speculative') else ''}t0 err {shift:+.0f}ms{RESET}")
+                mk = {k: m.marks.get(v) for k, v in (("eager", "eager_event"), ("end", "end_event"),
+                      ("req", "llm_request"), ("tok", "first_token"), ("tts", "tts_first_byte"))}
+                stages = "  ".join(f"{k} {v + shift:5.0f}" for k, v in mk.items() if v is not None)
+                print(f"{DIM}{name[:30]:<31} {m.model.removeprefix('claude-')[:6]:<7} v2v {v2v:5.0f}  {stages}{RESET}")
                 await asyncio.sleep(0.5)
     finally:
         convo.stop()
@@ -343,8 +347,11 @@ async def bench_v2v(cfg: Config, rounds: int) -> None:
         await brain.close()
         audit.close()
     n = len(rows["v2v"])
-    _table(n, [("voice-to-voice (all)", rows["v2v"]), ("  haiku turns", rows["v2v_haiku"]),
-               ("  sonnet turns", rows["v2v_sonnet"]), ("end of speech -> first token", rows["ttft"])],
+    _table(n, [("speech end -> EagerEndOfTurn", rows["eager"]), ("speech end -> EndOfTurn", rows["end"]),
+               ("speech end -> LLM request", rows["req"]), ("speech end -> first token", rows["ttft"]),
+               ("speech end -> TTS first byte", rows["tts"]),
+               ("voice-to-voice (all)", rows["v2v"]), ("  haiku turns", rows["v2v_haiku"]),
+               ("  sonnet turns", rows["v2v_sonnet"])],
            f"early start {'on' if eager else 'off'}, {spec}/{n} speculative")
 
 
@@ -585,7 +592,7 @@ async def bench_tts(cfg: Config, n: int, play: bool) -> None:
         if play:
             speaker.out.close()
     rows = [("TTS first byte", ttfb)] + ([("first sample at speaker", audio)] if play else [])
-    _table(n, rows, f"{cfg.tts.model} @ {cfg.tts.sample_rate} Hz -> {cfg.audio.output_rate} Hz out")
+    _table(n, rows, f"{cfg.tts.model} @ {cfg.tts.sample_rate} Hz -> {speaker.out.sample_rate} Hz out")
 
 
 async def bench_stt(cfg: Config, rounds: int, mode: str) -> None:
