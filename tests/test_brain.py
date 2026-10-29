@@ -38,6 +38,8 @@ class FakeStream:
                 if b.type == "text":
                     for word in b.text.split(" "):
                         yield NS(type="text", text=word + " ")
+                elif b.type == "tool_use":
+                    yield NS(type="content_block_start", content_block=b)
         return gen()
 
     async def get_final_message(self):
@@ -159,3 +161,26 @@ async def test_forced_tier(tmp_path):
     brain, client = make_brain(tmp_path, [reply(text("x"))], routing="fast")
     await brain.respond("What is the meaning of life?")
     assert client.calls[0]["model"] == "claude-haiku-5-5"
+
+
+async def test_chunks_and_filler_hook(tmp_path):
+    brain, _ = make_brain(tmp_path, [
+        reply(tool_use("t1", "get_time", {}), stop="tool_use"),
+        reply(text("Noon. A fine hour for it.")),
+    ])
+    chunks, fillers = [], []
+    m = await brain.respond("what's the time", on_chunk=chunks.append, on_tool_start=lambda: fillers.append(1))
+    assert fillers == [1]  # tool call before any speech: filler fires once
+    assert chunks == ["Noon.", "A fine hour for it."]
+    assert m.marks["tool_block"] < m.marks["first_token"]
+
+
+async def test_no_filler_when_already_speaking(tmp_path):
+    brain, _ = make_brain(tmp_path, [
+        reply(text("One moment."), tool_use("t1", "get_time", {}), stop="tool_use"),
+        reply(text("Noon.")),
+    ])
+    chunks, fillers = [], []
+    await brain.respond("what's the time", on_chunk=chunks.append, on_tool_start=lambda: fillers.append(1))
+    assert fillers == []
+    assert chunks == ["One moment.", "Noon."]  # pre-tool text flushed before the tool runs

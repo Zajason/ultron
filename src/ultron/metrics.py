@@ -31,6 +31,9 @@ class TurnMetrics:
         parts.append(f"ttft {m['first_token']:.0f}ms" if "first_token" in m else "no text")
         if "first_chunk" in m:
             parts.append(f"first chunk {m['first_chunk']:.0f}ms")
+        if "first_audio" in m:
+            filler = " (filler)" if "tool_block" in m and m["first_audio"] < m.get("tts_first_byte", 0) else ""
+            parts.append(f"first audio {m['first_audio']:.0f}ms{filler}")
         if self.tools:
             parts.append("tools " + ", ".join(f"{t['name']} {t['ms']:.0f}ms" for t in self.tools))
         parts.append(f"total {m.get('done', 0):.0f}ms")

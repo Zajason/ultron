@@ -35,11 +35,41 @@ class ToolsConfig:
 
 
 @dataclass(frozen=True)
+class TTSConfig:
+    enabled: bool = True
+    provider: str = "cartesia"
+    model: str = "sonic-3.6-2026-08-27"
+    voice_id: str = "d2c66146-c1c8-4c3a-9870-38e5a6b72442"
+    sample_rate: int = 24000
+    speed: float = 0.9
+    emotion: str = ""
+    ellipsis_ms: int = 400
+
+
+@dataclass(frozen=True)
+class AudioConfig:
+    output_device: str = ""
+    block_ms: int = 10
+
+
+@dataclass(frozen=True)
+class FXConfig:
+    enabled: bool = True
+    warmth_db: float = 3.0
+    reverb_wet: float = 0.08
+    metal_mix: float = 0.12
+    metal_hz: float = 60.0
+
+
+@dataclass(frozen=True)
 class Config:
     user_name: str = "Iason"
     menace_level: int = 2
     llm: LLMConfig = field(default_factory=LLMConfig)
     tools: ToolsConfig = field(default_factory=ToolsConfig)
+    tts: TTSConfig = field(default_factory=TTSConfig)
+    audio: AudioConfig = field(default_factory=AudioConfig)
+    fx: FXConfig = field(default_factory=FXConfig)
     turns_log: Path = Path("~/.ultron/turns.jsonl")
 
 
@@ -81,5 +111,8 @@ def load_config(root: Path | None = None) -> Config:
         menace_level=menace,
         llm=llm,
         tools=tools,
+        tts=TTSConfig(**raw.get("tts", {})),
+        audio=AudioConfig(**raw.get("audio", {})),
+        fx=FXConfig(**raw.get("fx", {})),
         turns_log=_path(raw.get("metrics", {}).get("turns_log", "~/.ultron/turns.jsonl")),
     )

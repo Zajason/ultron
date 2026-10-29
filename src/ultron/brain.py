@@ -16,13 +16,14 @@ import httpx2
 from anthropic import AsyncAnthropic, DefaultAsyncHttpxClient
 
 from .config import Config, LLMConfig
-from .metrics import TurnLog, TurnMetrics
+from .metrics import TurnMetrics
 from .persona import PLAIN_OFF, PLAIN_ON, build_system_prompt, detect_mode_switch
 from .router import route
 from .text import Chunker
 from .tools import Executor, Registry
 
 OnText = Callable[[str], None]
+OnEvent = Callable[[], None]
 
 
 def make_client(cfg: LLMConfig) -> AsyncAnthropic:
@@ -40,13 +41,11 @@ class Brain:
         registry: Registry,
         executor: Executor,
         client: AsyncAnthropic | None = None,
-        turn_log: TurnLog | None = None,
     ) -> None:
         self.cfg = cfg
         self.llm = cfg.llm
         self.client = client or make_client(cfg.llm)
         self.executor = executor
-        self.turn_log = turn_log
         self.tools = registry.schemas()
         self.messages: list[dict[str, Any]] = []
         self.plain = False
@@ -143,7 +142,16 @@ class Brain:
         if self.plain and not any(m["role"] == "system" for m in self.messages):
             self.messages.insert(1, {"role": "system", "content": PLAIN_ON})
 
-    async def respond(self, user_text: str, on_text: OnText = lambda s: None, tier: str | None = None) -> TurnMetrics:
+    async def respond(
+        self,
+        user_text: str,
+        on_text: OnText = lambda s: None,
+        tier: str | None = None,
+        on_chunk: OnText = lambda s: None,
+        on_tool_start: OnEvent = lambda: None,
+    ) -> TurnMetrics:
+        """Run one user turn. on_text gets raw deltas (display), on_chunk gets speakable chunks
+        (TTS), on_tool_start fires once if a tool call starts before anything was said (filler)."""
         model = self.model_for(user_text, tier)
         m = TurnMetrics(transcript=user_text, model=model)
         self._add_user(user_text)
@@ -153,16 +161,26 @@ class Brain:
 
         def emit(delta: str) -> None:
             m.mark("first_token")
-            if chunker.feed(delta):
-                m.mark("first_chunk")
             on_text(delta)
+            for c in chunker.feed(delta):
+                speak(c)
+
+        def speak(c: str | None) -> None:
+            if c:
+                m.mark("first_chunk")
+                on_chunk(c)
+
+        def tool_block() -> None:
+            if "first_token" not in m.marks and "tool_block" not in m.marks:
+                m.mark("tool_block")
+                on_tool_start()
 
         rounds = self.llm.max_tool_rounds
         for rnd in range(rounds + 1):
             if spoke:
                 on_text(" ")
             # Last round: no more tools, so the model has to answer with what it has.
-            final = await self._stream_once(model, m, rnd, emit, no_tools=rnd == rounds)
+            final = await self._stream_once(model, m, rnd, emit, tool_block, no_tools=rnd == rounds)
             self.messages.append({"role": "assistant", "content": final.content})
             spoke = spoke or any(b.type == "text" and b.text for b in final.content)
 
@@ -178,18 +196,16 @@ class Brain:
                 ]})
                 break
             # Text before a tool call ("Opening it.") is speakable now, before the tool runs.
-            if chunker.flush():
-                m.mark("first_chunk")
+            speak(chunker.flush())
             self.messages.append({"role": "user", "content": await self._run_tools(tool_uses, m, user_text)})
 
-        if chunker.flush():
-            m.mark("first_chunk")
+        speak(chunker.flush())
         m.mark("done")
-        if self.turn_log:
-            self.turn_log.write(m)
         return m
 
-    async def _stream_once(self, model: str, m: TurnMetrics, rnd: int, emit: OnText, no_tools: bool = False):
+    async def _stream_once(
+        self, model: str, m: TurnMetrics, rnd: int, emit: OnText, tool_block: OnEvent, no_tools: bool = False
+    ):
         t_req = time.perf_counter()
         ttft = None
         extra = {"tool_choice": {"type": "none"}} if no_tools else {}
@@ -201,6 +217,8 @@ class Brain:
                     if ttft is None:
                         ttft = (time.perf_counter() - t_req) * 1000
                     emit(event.text)
+                elif event.type == "content_block_start" and event.content_block.type == "tool_use":
+                    tool_block()
             final = await stream.get_final_message()
         u = final.usage
         m.llm_calls.append(
