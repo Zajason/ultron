@@ -53,7 +53,8 @@ keyterms = ["Ultron", "Iason"]
 [audio]
 input_device = ""                       # "" = system default
 output_device = ""                      # "" = system default
-output_rate = 48000                     # the Mac's native rate: avoids CoreAudio's resampler (+15-30 ms)
+output_rate = 0                         # 0 = device's native rate (48k speakers, 44.1k XM5): no CoreAudio resampling
+avoid_bluetooth_mic = true              # a Bluetooth mic forces headset mode; use the built-in mic instead
 latency_ms = 10                         # buffer hint; reported output latency ~38 ms on built-in speakers
 
 [fx]

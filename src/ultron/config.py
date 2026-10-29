@@ -65,7 +65,8 @@ class STTConfig:
 class AudioConfig:
     input_device: str = ""
     output_device: str = ""
-    output_rate: int = 48000
+    output_rate: int = 0
+    avoid_bluetooth_mic: bool = True
     latency_ms: float = 10
 
 

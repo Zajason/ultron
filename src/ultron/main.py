@@ -29,6 +29,7 @@ from dotenv import load_dotenv
 
 from .audio import AudioOutput, VoiceFX
 from .audio.fillers import load_fillers
+from .audio.devices import choose_input
 from .audio.input import MicInput
 from .audio.speaker import Speaker
 from .backends import CartesiaTTS, DeepgramFlux
@@ -81,10 +82,21 @@ def _require(var: str) -> str:
     return v
 
 
+def _open_mic(cfg: Config) -> MicInput:
+    """Open the mic before any output stream: if it's a Bluetooth headset, its profile switch then
+    happens before the output exists, instead of breaking it."""
+    device, note = choose_input(cfg.audio.input_device, cfg.audio.avoid_bluetooth_mic)
+    if note:
+        print(f"{DIM}{note}{RESET}")
+    mic = MicInput(cfg.stt.sample_rate, cfg.stt.frame_ms, cfg.audio.latency_ms, device)
+    mic.open()
+    return mic
+
+
 def _build_speaker(cfg: Config) -> Speaker:
     tts = CartesiaTTS(cfg.tts, _require("CARTESIA_API_KEY"))
     out = AudioOutput(cfg.audio.output_rate, cfg.audio.latency_ms, cfg.audio.output_device)
-    fx = VoiceFX(cfg.fx, cfg.audio.output_rate) if cfg.fx.enabled else None
+    fx = VoiceFX(cfg.fx, out.sample_rate) if cfg.fx.enabled else None
     return Speaker(tts, out, fx, cfg.tts)
 
 
@@ -185,6 +197,7 @@ async def text_mode(cfg: Config, mute: bool) -> None:
 
 async def talk(cfg: Config) -> None:
     """Push-to-talk: Enter starts listening, Enter again sends. Speaking over Ultron interrupts him."""
+    mic = _open_mic(cfg)
     speaker = _build_speaker(cfg)
 
     async def announce(line: str) -> None:
@@ -193,11 +206,11 @@ async def talk(cfg: Config) -> None:
 
     brain, audit = _build(cfg, announce)
     turn_log = TurnLog(cfg.turns_log)
-    mic = MicInput(cfg.stt.sample_rate, cfg.stt.frame_ms, cfg.audio.latency_ms, cfg.audio.input_device)
     ptt = PushToTalk(DeepgramFlux(cfg.stt, _require("DEEPGRAM_API_KEY")), mic)
     print(f"{DIM}warming up…{RESET}", end=" ", flush=True)
     ready = [f"llm {await brain.warm():.0f}ms", await _start_speaker(speaker, cfg),
-             f"mic {mic.name} {mic.capture_rate} Hz, {mic.device_latency_ms:.0f}ms"]
+             f"mic {mic.name} {mic.capture_rate} Hz, {mic.device_latency_ms:.0f}ms",
+             f"out {speaker.out.sample_rate} Hz"]
     print(f"{DIM}{' · '.join(ready)}{RESET}")
     print(f"{DIM}Enter to talk, Enter again to send. Type q then Enter to quit.{RESET}")
     try:
@@ -251,13 +264,10 @@ async def mic_test(cfg: Config, seconds: float) -> None:
     from .replay import replay_one
 
     print(f"{BOLD}Input devices{RESET}")
-    default = sd.query_devices(kind="input")["name"]
     for i, d in enumerate(sd.query_devices()):
         if d["max_input_channels"] > 0:
-            mark = "  ← in use" if d["name"] == (cfg.audio.input_device or default) else ""
-            print(f"  {i}: {d['name']} ({d['default_samplerate']:.0f} Hz){mark}")
-
-    mic = MicInput(cfg.stt.sample_rate, cfg.stt.frame_ms, cfg.audio.latency_ms, cfg.audio.input_device)
+            print(f"  {i}: {d['name']} ({d['default_samplerate']:.0f} Hz)")
+    mic = _open_mic(cfg)
     print(f"\n{BOLD}1. Recording {seconds:g}s from {mic.name} ({mic.capture_rate} Hz). Speak now…{RESET}")
     mic.start()
     frames: list[bytes] = []

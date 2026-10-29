@@ -144,3 +144,16 @@ async def test_pump_failure_surfaces_before_release():
         assert "bad mic rate" in str(e)
     else:
         raise AssertionError("expected the mic error")
+
+
+def test_choose_input_avoids_bluetooth(monkeypatch):
+    from ultron.audio import devices
+
+    monkeypatch.setattr(devices.sd, "query_devices", lambda *a, **k: {"name": "WH-1000XM5"})
+    monkeypatch.setattr(devices, "transports", lambda: {
+        ("WH-1000XM5", "input"): "bluetooth", ("WH-1000XM5", "output"): "bluetooth",
+        ("MacBook Pro Microphone", "input"): "builtin",
+    })
+    assert devices.choose_input("")[0] == "MacBook Pro Microphone"
+    assert devices.choose_input("", avoid_bluetooth=False) == (None, "")
+    assert devices.choose_input("WH-1000XM5") == ("WH-1000XM5", "")  # explicit choice wins

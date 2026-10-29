@@ -41,9 +41,13 @@ def to_linear16(x: np.ndarray) -> bytes:
 
 
 class MicInput:
-    """Async microphone source. start()/stop() bracket one capture; frames() yields fixed-size
-    linear16 frames, and the final partial frame immediately when stopped (push-to-talk release
-    must not wait for a frame to fill)."""
+    """Async microphone source.
+
+    open() starts the device once and leaves it running: starting a device per press costs time
+    (much more on Bluetooth), and on a headset it would flip the Bluetooth profile mid-session.
+    start()/stop() then just bracket one capture; frames() yields fixed-size linear16 frames, and
+    the final partial frame immediately on stop (a push-to-talk release must not wait for a frame
+    to fill)."""
 
     def __init__(self, out_rate: int = 16000, frame_ms: int = 80, latency_ms: float = 10,
                  device: str | int | None = None) -> None:
@@ -54,6 +58,7 @@ class MicInput:
         self.frame_samples = out_rate * frame_ms // 1000
         self._q: asyncio.Queue[np.ndarray | None] = asyncio.Queue()
         self._loop: asyncio.AbstractEventLoop | None = None
+        self._capturing = False
         self.level = 0.0  # RMS of the last block, for a meter
         self.peak = 0.0  # max |sample| since start(): exactly 0 means the OS is feeding silence
         self.t_started: float | None = None
@@ -69,22 +74,28 @@ class MicInput:
     def _callback(self, indata, frames, time_info, status) -> None:
         block = indata[:, 0].copy()
         self.level = float(np.sqrt(np.mean(block**2)))
-        self.peak = max(self.peak, float(np.abs(block).max(initial=0.0)))
-        if self._loop:
+        if self._capturing:
+            self.peak = max(self.peak, float(np.abs(block).max(initial=0.0)))
+        if self._capturing and self._loop:
             self._loop.call_soon_threadsafe(self._q.put_nowait, block)
 
+    def open(self) -> None:
+        if not self._stream.active:
+            self._stream.start()
+
     def start(self) -> None:
+        self.open()
         self._loop = asyncio.get_running_loop()
         self._q = asyncio.Queue()
         self.peak = 0.0
         self.t_started = time.perf_counter()
-        self._stream.start()
+        self._capturing = True
 
     def stop(self) -> None:
-        """Stop capturing; frames() drains what's left and ends."""
-        self._stream.stop()
+        """Stop capturing; frames() drains what's left and ends. The device keeps running."""
+        self._capturing = False
         if self._loop:
-            self._q.put_nowait(None)
+            self._loop.call_soon_threadsafe(self._q.put_nowait, None)
 
     async def frames(self):
         dec = Downsampler(self.capture_rate, self.out_rate)
@@ -98,4 +109,5 @@ class MicInput:
             yield to_linear16(pending)
 
     def close(self) -> None:
+        self._stream.stop()
         self._stream.close()

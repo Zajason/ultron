@@ -15,8 +15,9 @@ import sounddevice as sd
 
 
 class AudioOutput:
-    def __init__(self, sample_rate: int, latency_ms: float = 10, device: str | int | None = None) -> None:
-        self.sample_rate = sample_rate
+    def __init__(self, sample_rate: int = 0, latency_ms: float = 10, device: str | int | None = None) -> None:
+        # 0 = the device's native rate, so CoreAudio doesn't resample (and add latency) behind us.
+        self.sample_rate = sample_rate or int(sd.query_devices(device or None, kind="output")["default_samplerate"])
         self._q: collections.deque[np.ndarray] = collections.deque()
         self._offset = 0  # samples already played from _q[0]
         self._lock = threading.Lock()
@@ -25,7 +26,7 @@ class AudioOutput:
         self._armed = False
         self.first_audio_at: float | None = None  # perf_counter time the first armed sample hits the DAC
         self._stream = sd.OutputStream(
-            samplerate=sample_rate,
+            samplerate=self.sample_rate,
             channels=1,
             dtype="float32",
             blocksize=0,  # let CoreAudio pick per-callback sizes; with a small latency hint that is lowest
