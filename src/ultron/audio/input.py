@@ -54,6 +54,7 @@ class MicInput:
         self._q: asyncio.Queue[np.ndarray | None] = asyncio.Queue()
         self._loop: asyncio.AbstractEventLoop | None = None
         self.level = 0.0  # RMS of the last block, for a meter
+        self.peak = 0.0  # max |sample| since start(): exactly 0 means the OS is feeding silence
         self.t_started: float | None = None
         self._stream = sd.InputStream(
             samplerate=self.capture_rate, channels=1, dtype="float32", blocksize=0,
@@ -67,12 +68,14 @@ class MicInput:
     def _callback(self, indata, frames, time_info, status) -> None:
         block = indata[:, 0].copy()
         self.level = float(np.sqrt(np.mean(block**2)))
+        self.peak = max(self.peak, float(np.abs(block).max(initial=0.0)))
         if self._loop:
             self._loop.call_soon_threadsafe(self._q.put_nowait, block)
 
     def start(self) -> None:
         self._loop = asyncio.get_running_loop()
         self._q = asyncio.Queue()
+        self.peak = 0.0
         self.t_started = time.perf_counter()
         self._stream.start()
 

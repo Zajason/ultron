@@ -12,6 +12,7 @@ from ultron.replay import wer
 
 class FakeMic:
     level = 0.0
+    peak = 0.0
 
     def __init__(self, frames):
         self._frames = frames

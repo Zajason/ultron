@@ -18,6 +18,7 @@ import itertools
 import os
 import sys
 import time
+import traceback
 import wave
 from collections.abc import Awaitable, Callable
 from pathlib import Path
@@ -39,7 +40,15 @@ from .platform import get_platform
 from .tools import AuditLog, Executor, Registry, Tier, Timers, Tool, register_builtin
 from .voices import AUDITION_TEXT, PRESETS, SHORTLIST
 
-DIM, RESET, BOLD = "\033[2m", "\033[0m", "\033[1m"
+DIM, RESET, BOLD, RED = "\033[2m", "\033[0m", "\033[1m", "\033[31m"
+ERROR_LOG = Path("~/.ultron/errors.log").expanduser()
+
+
+def _log_error(where: str, e: BaseException) -> None:
+    ERROR_LOG.parent.mkdir(parents=True, exist_ok=True)
+    with ERROR_LOG.open("a") as f:
+        f.write(f"--- {time.strftime('%Y-%m-%d %H:%M:%S')} {where}\n{''.join(traceback.format_exception(e))}\n")
+    print(f"\n{RED}{where} failed: {type(e).__name__}: {e}{RESET} {DIM}(details in {ERROR_LOG}){RESET}", flush=True)
 CACHE_DIR = Path("~/.ultron/cache").expanduser()
 
 Announce = Callable[[str], Awaitable[None]]
@@ -202,13 +211,25 @@ async def talk(cfg: Config) -> None:
             print(f"\033[1A\r\033[K{BOLD}you ›{RESET} {DIM}listening…{RESET}", end="", flush=True)
 
             def partial(text: str) -> None:
-                print(f"\r\033[K{BOLD}you ›{RESET} {DIM}{text}{RESET}", end="", flush=True)
+                if text:
+                    print(f"\r\033[K{BOLD}you ›{RESET} {DIM}{text}{RESET}", end="", flush=True)
 
-            heard = await ptt.capture(lambda: asyncio.to_thread(input), partial)
+            try:
+                heard = await ptt.capture(lambda: asyncio.to_thread(input), partial)
+            except Exception as e:
+                _log_error("listening", e)
+                continue
             print(f"\033[1A\r\033[K{BOLD}you ›{RESET} {heard.transcript or DIM + '(nothing heard)' + RESET}")
             if not heard.transcript:
+                if mic.peak < 1e-4:
+                    print(f"{RED}The microphone is sending silence.{RESET} {DIM}Allow your terminal app under System Settings → "
+                          f"Privacy & Security → Microphone, then restart the terminal. Input device: {mic.name}{RESET}")
                 continue
-            m = await _reply(brain, speaker, heard.transcript, t0=heard.t_release)
+            try:
+                m = await _reply(brain, speaker, heard.transcript, t0=heard.t_release)
+            except Exception as e:
+                _log_error("replying", e)
+                continue
             m.marks["stt_final"] = round(heard.final_ms, 1)
             m.marks["stt_connect"] = round(heard.connect_ms, 1)
             turn_log.write(m)
@@ -416,7 +437,11 @@ def main() -> None:
         match args.cmd:
             case "talk":
                 _require("ANTHROPIC_API_KEY")
-                asyncio.run(talk(cfg))
+                try:
+                    asyncio.run(talk(cfg))
+                except Exception as e:
+                    _log_error("ultron talk", e)
+                    sys.exit(1)
             case "text":
                 _require("ANTHROPIC_API_KEY")
                 asyncio.run(text_mode(cfg, args.mute))
