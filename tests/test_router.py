@@ -1,0 +1,45 @@
+import pytest
+
+from ultron.router import route
+
+FAST = [
+    "Set a timer for ten minutes.",
+    "How long left on the timer?",
+    "Open VS Code",
+    "open spotify",
+    "Turn the volume down",
+    "What time is it?",
+    "what's the date",
+    "How's the battery?",
+    "Make a note: buy coffee",
+    "pause",
+    "Yes.",
+    "proceed",
+    "Thanks, Ultron.",
+    "Good morning",
+    "never mind",
+    "How much memory is free?",
+]
+STRONG = [
+    "What do you think of humans?",
+    "Do you think you're conscious?",
+    "I just finished Crime and Punishment.",
+    "Why do you even help me?",
+    "I had a pretty bad day.",
+    "What's the most beautiful thing humans have made?",
+    "Do you think time is real?",
+    "Is it worth starting over at thirty?",
+    "Tell me about Bach.",
+    "What do you think about memory, and why humans romanticise it?",
+    "Good morning. I couldn't sleep, I kept thinking about whether any of this matters.",
+]
+
+
+@pytest.mark.parametrize("text", FAST)
+def test_practical_goes_fast(text):
+    assert route(text) == "fast"
+
+
+@pytest.mark.parametrize("text", STRONG)
+def test_conversation_goes_strong(text):
+    assert route(text) == "strong"

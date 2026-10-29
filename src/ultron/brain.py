@@ -18,6 +18,7 @@ from anthropic import AsyncAnthropic, DefaultAsyncHttpxClient
 from .config import Config, LLMConfig
 from .metrics import TurnLog, TurnMetrics
 from .persona import PLAIN_OFF, PLAIN_ON, build_system_prompt, detect_mode_switch
+from .router import route
 from .text import Chunker
 from .tools import Executor, Registry
 
@@ -86,13 +87,25 @@ class Brain:
 
     # -- connection / cache warming --------------------------------------------------------------
 
+    def _models(self) -> list[str]:
+        r = self.llm.routing
+        return [self.llm.fast_model] * (r != "strong") + [self.llm.strong_model] * (r != "fast")
+
+    def model_for(self, text: str, tier: str | None = None) -> str:
+        tier = tier or (route(text) if self.llm.routing == "hybrid" else self.llm.routing)
+        return self.llm.fast_model if tier == "fast" else self.llm.strong_model
+
     async def warm(self) -> float:
-        """Open the connection and write the tools+system cache. Returns elapsed ms."""
+        """Open the connection and write the tools+system cache for every model in use (caches are
+        per model). Returns elapsed ms."""
         t0 = time.perf_counter()
-        await self.client.messages.create(
-            **{**self._params(self.llm.fast_model), "max_tokens": 0},
-            messages=[{"role": "user", "content": "warmup"}],
-        )
+        await asyncio.gather(*(
+            self.client.messages.create(
+                **{**self._params(model), "max_tokens": 0},
+                messages=[{"role": "user", "content": "warmup"}],
+            )
+            for model in self._models()
+        ))
         return (time.perf_counter() - t0) * 1000
 
     async def close(self) -> None:
@@ -130,8 +143,8 @@ class Brain:
         if self.plain and not any(m["role"] == "system" for m in self.messages):
             self.messages.insert(1, {"role": "system", "content": PLAIN_ON})
 
-    async def respond(self, user_text: str, on_text: OnText = lambda s: None) -> TurnMetrics:
-        model = self.llm.fast_model
+    async def respond(self, user_text: str, on_text: OnText = lambda s: None, tier: str | None = None) -> TurnMetrics:
+        model = self.model_for(user_text, tier)
         m = TurnMetrics(transcript=user_text, model=model)
         self._add_user(user_text)
         self._trim()

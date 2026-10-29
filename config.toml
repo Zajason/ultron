@@ -11,8 +11,11 @@ name = "Iason"
 menace_level = 2
 
 [llm]
+# "hybrid": practical requests -> fast model (~0.7 s to first word), conversation -> strong model
+# (~1.2 s, much better writing). "fast" / "strong" force one model for every turn.
+routing = "hybrid"
 fast_model = "claude-haiku-5-5"
-strong_model = "claude-sonnet-5-5"      # used from Milestone 6 (escalation)
+strong_model = "claude-sonnet-5-5"
 max_tokens = 1024                       # spoken replies are 1-3 sentences; this is a runaway guard
 # Thinking adds time-to-first-token. "disabled" is fastest; "adaptive" lets the model think when it wants.
 thinking = "disabled"

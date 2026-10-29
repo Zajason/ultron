@@ -145,3 +145,17 @@ async def test_trim_keeps_plain_mode(tmp_path):
     for i in range(3):
         await brain.respond(f"q{i}")
     assert brain.messages[1] == {"role": "system", "content": PLAIN_ON}
+
+
+async def test_hybrid_routing_picks_model_per_turn(tmp_path):
+    brain, client = make_brain(tmp_path, [reply(text("Done.")), reply(text("A long thought."))])
+    await brain.respond("set a timer for five minutes")
+    await brain.respond("Do you think art outlives the people who make it?")
+    assert [c["model"] for c in client.calls] == ["claude-haiku-5-5", "claude-sonnet-5-5"]
+    assert client.calls[1]["thinking"] == {"type": "between_tools"}
+
+
+async def test_forced_tier(tmp_path):
+    brain, client = make_brain(tmp_path, [reply(text("x"))], routing="fast")
+    await brain.respond("What is the meaning of life?")
+    assert client.calls[0]["model"] == "claude-haiku-5-5"

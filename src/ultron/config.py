@@ -11,6 +11,7 @@ from pathlib import Path
 
 @dataclass(frozen=True)
 class LLMConfig:
+    routing: str = "hybrid"
     fast_model: str = "claude-haiku-5-5"
     strong_model: str = "claude-sonnet-5-5"
     max_tokens: int = 1024
@@ -67,6 +68,8 @@ def load_config(root: Path | None = None) -> Config:
             raw = _merge(raw, tomllib.loads(f.read_text()))
 
     llm = LLMConfig(**raw.get("llm", {}))
+    if llm.routing not in ("hybrid", "fast", "strong"):
+        raise ValueError(f"llm.routing must be hybrid, fast or strong, got {llm.routing!r}")
     tools = ToolsConfig(**raw.get("tools", {}))
     tools = ToolsConfig(**{**tools.__dict__, "notes_file": _path(tools.notes_file), "audit_log": _path(tools.audit_log)})
 
