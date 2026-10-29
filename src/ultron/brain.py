@@ -149,11 +149,14 @@ class Brain:
         tier: str | None = None,
         on_chunk: OnText = lambda s: None,
         on_tool_start: OnEvent = lambda: None,
+        t0: float | None = None,
     ) -> TurnMetrics:
         """Run one user turn. on_text gets raw deltas (display), on_chunk gets speakable chunks
         (TTS), on_tool_start fires once if a tool call starts before anything was said (filler)."""
         model = self.model_for(user_text, tier)
         m = TurnMetrics(transcript=user_text, model=model)
+        if t0 is not None:
+            m.t0 = t0  # voice turns are timed from when the user stopped talking
         self._add_user(user_text)
         self._trim()
         chunker = Chunker()

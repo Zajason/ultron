@@ -38,7 +38,20 @@ emotion = "mysterious"                  # Cartesia emotion; "" lets it infer fro
 ellipsis_ms = 400                       # pause for the persona's "…"
 pitch_semitones = -1.5                  # varispeed playback: lower = deeper and heavier, zero latency
 
+[stt]
+provider = "deepgram"
+model = "flux-general-en"               # conversational STT with built-in turn detection
+region = "eu"                           # Frankfurt: ~49 ms RTT from Athens vs ~121 ms to the US endpoint
+sample_rate = 16000
+frame_ms = 80                           # Deepgram's recommended frame size
+eot_threshold = 0.7                     # Milestone 4: end-of-turn confidence
+ptt_eot_threshold = 1.0                 # push-to-talk: only the release ends a turn (0.7 cut "humans" to "human")
+eager_eot_threshold = 0.0               # Milestone 4/7: >0 enables EagerEndOfTurn (speculative LLM start)
+eot_timeout_ms = 5000
+keyterms = ["Ultron", "Iason"]
+
 [audio]
+input_device = ""                       # "" = system default
 output_device = ""                      # "" = system default
 output_rate = 48000                     # the Mac's native rate: avoids CoreAudio's resampler (+15-30 ms)
 latency_ms = 10                         # buffer hint; reported output latency ~38 ms on built-in speakers

@@ -48,7 +48,22 @@ class TTSConfig:
 
 
 @dataclass(frozen=True)
+class STTConfig:
+    provider: str = "deepgram"
+    model: str = "flux-general-en"
+    region: str = "eu"
+    sample_rate: int = 16000
+    frame_ms: int = 80
+    eot_threshold: float = 0.7
+    ptt_eot_threshold: float = 1.0
+    eager_eot_threshold: float = 0.0
+    eot_timeout_ms: int = 5000
+    keyterms: tuple[str, ...] = ("Ultron", "Iason")
+
+
+@dataclass(frozen=True)
 class AudioConfig:
+    input_device: str = ""
     output_device: str = ""
     output_rate: int = 48000
     latency_ms: float = 10
@@ -75,6 +90,7 @@ class Config:
     llm: LLMConfig = field(default_factory=LLMConfig)
     tools: ToolsConfig = field(default_factory=ToolsConfig)
     tts: TTSConfig = field(default_factory=TTSConfig)
+    stt: STTConfig = field(default_factory=STTConfig)
     audio: AudioConfig = field(default_factory=AudioConfig)
     fx: FXConfig = field(default_factory=FXConfig)
     turns_log: Path = Path("~/.ultron/turns.jsonl")
@@ -119,6 +135,7 @@ def load_config(root: Path | None = None) -> Config:
         llm=llm,
         tools=tools,
         tts=TTSConfig(**raw.get("tts", {})),
+        stt=STTConfig(**{k: tuple(v) if isinstance(v, list) else v for k, v in raw.get("stt", {}).items()}),
         audio=AudioConfig(**raw.get("audio", {})),
         fx=FXConfig(**raw.get("fx", {})),
         turns_log=_path(raw.get("metrics", {}).get("turns_log", "~/.ultron/turns.jsonl")),

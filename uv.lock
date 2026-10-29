@@ -157,6 +157,22 @@ wheels = [
 ]
 
 [[package]]
+name = "deepgram-sdk"
+version = "7.16.0"
+source = { registry = "https://pypi.org/simple" }
+dependencies = [
+    { name = "httpx" },
+    { name = "pydantic" },
+    { name = "pydantic-core" },
+    { name = "typing-extensions" },
+    { name = "websockets" },
+]
+sdist = { url = "https://files.pythonhosted.org/packages/7e/49/12689f545758e15b6f02a4b79fb5f3332728959649c87fdeb70ea4e666bf/deepgram_sdk-7.16.0.tar.gz", hash = "sha256:29fb1e73e40b053b3f86751f1cd208c7bd2531087e05728ec7322fd4f49c63e4", size = 261070, upload-time = "2026-10-28T10:34:24.923Z" }
+wheels = [
+    { url = "https://files.pythonhosted.org/packages/6b/15/a37569dcdfb220375ef08b2b9d7c33c8c07e90d50418925fb5d2caff414d/deepgram_sdk-7.16.0-py3-none-any.whl", hash = "sha256:8a2fa9363def5d179ff7b26bf4daf9002c369499aab6742abb0a5864617ccb1f", size = 680260, upload-time = "2026-10-28T10:34:23.27Z" },
+]
+
+[[package]]
 name = "distro"
 version = "1.9.0"
 source = { registry = "https://pypi.org/simple" }
@@ -710,6 +726,7 @@ source = { editable = "." }
 dependencies = [
     { name = "anthropic" },
     { name = "cartesia", extra = ["websockets"] },
+    { name = "deepgram-sdk" },
     { name = "numpy" },
     { name = "pedalboard" },
     { name = "psutil" },
@@ -727,6 +744,7 @@ dev = [
 requires-dist = [
     { name = "anthropic", specifier = "==2.3.0" },
     { name = "cartesia", extras = ["websockets"], specifier = "==4.2.0" },
+    { name = "deepgram-sdk", specifier = "==7.16.0" },
     { name = "numpy", specifier = "==2.5.4" },
     { name = "pedalboard", specifier = "==0.9.26" },
     { name = "psutil", specifier = "==7.2.2" },

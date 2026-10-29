@@ -28,6 +28,8 @@ class TurnMetrics:
     def summary(self) -> str:
         m = self.marks
         parts = [self.model.removeprefix("claude-").split("-")[0]]
+        if "stt_final" in m:
+            parts.append(f"stt {m['stt_final']:.0f}ms")
         parts.append(f"ttft {m['first_token']:.0f}ms" if "first_token" in m else "no text")
         if "first_chunk" in m:
             parts.append(f"first chunk {m['first_chunk']:.0f}ms")

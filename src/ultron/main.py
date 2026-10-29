@@ -1,10 +1,12 @@
 """CLI entrypoint.
 
+  ultron talk          push-to-talk voice conversation (Enter to start/stop)
   ultron text          chat in the terminal, spoken aloud (--mute for text only)
   ultron say TEXT      speak one line
   ultron audition      play a sample line in each shortlisted voice
   ultron bench-llm     LLM latency percentiles
   ultron bench-tts     TTS latency percentiles
+  ultron bench-stt     STT latency over the recorded utterances (replay harness)
 """
 
 from __future__ import annotations
@@ -25,10 +27,12 @@ from dotenv import load_dotenv
 
 from .audio import AudioOutput, VoiceFX
 from .audio.fillers import load_fillers
+from .audio.input import MicInput
 from .audio.speaker import Speaker
-from .backends import CartesiaTTS
+from .backends import CartesiaTTS, DeepgramFlux
 from .brain import Brain
 from .config import Config, load_config
+from .listen import PushToTalk
 from .metrics import TurnLog, TurnMetrics, percentile
 from .persona import FILLER_LINES
 from .platform import get_platform
@@ -98,6 +102,20 @@ def _merge_audio_marks(m: TurnMetrics, speaker: Speaker, first_audio: float | No
 HELP = "/menace 0-3 · /reset · /quit"
 
 
+async def _reply(brain: Brain, speaker: Speaker | None, text: str, t0: float | None = None) -> TurnMetrics:
+    """One assistant turn: stream the reply to the terminal and, if voiced, to the speaker."""
+    print(f"{BOLD}ultron ›{RESET} ", end="", flush=True)
+    show = lambda s: print(s, end="", flush=True)  # noqa: E731
+    if not speaker:
+        return await brain.respond(text, show, t0=t0)
+    speaker.begin()
+    m = await brain.respond(text, show, on_chunk=speaker.say, on_tool_start=speaker.play_filler, t0=t0)
+    speaker.end()
+    await speaker.finished()
+    _merge_audio_marks(m, speaker, await _first_audio(speaker))
+    return m
+
+
 async def text_mode(cfg: Config, mute: bool) -> None:
     speaker = None if mute or not cfg.tts.enabled else _build_speaker(cfg)
 
@@ -143,20 +161,7 @@ async def text_mode(cfg: Config, mute: bool) -> None:
                 print(f"{DIM}{HELP}{RESET}")
                 continue
 
-            print(f"{BOLD}ultron ›{RESET} ", end="", flush=True)
-            if speaker:
-                speaker.begin()
-                m = await brain.respond(
-                    line,
-                    lambda s: print(s, end="", flush=True),
-                    on_chunk=speaker.say,
-                    on_tool_start=speaker.play_filler,
-                )
-                speaker.end()
-                await speaker.finished()
-                _merge_audio_marks(m, speaker, await _first_audio(speaker))
-            else:
-                m = await brain.respond(line, lambda s: print(s, end="", flush=True))
+            m = await _reply(brain, speaker, line)
             turn_log.write(m)
             print(f"\n{DIM}{m.summary()}{RESET}")
     finally:
@@ -164,6 +169,55 @@ async def text_mode(cfg: Config, mute: bool) -> None:
             speaker.interrupt()
             await speaker.tts.close()
             speaker.out.close()
+        await brain.close()
+        audit.close()
+
+
+async def talk(cfg: Config) -> None:
+    """Push-to-talk: Enter starts listening, Enter again sends. Speaking over Ultron interrupts him."""
+    speaker = _build_speaker(cfg)
+
+    async def announce(line: str) -> None:
+        if not speaker.out.busy:
+            await speaker.say_line(line)
+
+    brain, audit = _build(cfg, announce)
+    turn_log = TurnLog(cfg.turns_log)
+    mic = MicInput(cfg.stt.sample_rate, cfg.stt.frame_ms, cfg.audio.latency_ms, cfg.audio.input_device)
+    ptt = PushToTalk(DeepgramFlux(cfg.stt, _require("DEEPGRAM_API_KEY")), mic)
+    print(f"{DIM}warming up…{RESET}", end=" ", flush=True)
+    ready = [f"llm {await brain.warm():.0f}ms", await _start_speaker(speaker, cfg),
+             f"mic {mic.name} {mic.capture_rate} Hz, {mic.device_latency_ms:.0f}ms"]
+    print(f"{DIM}{' · '.join(ready)}{RESET}")
+    print(f"{DIM}Enter to talk, Enter again to send. Type q then Enter to quit.{RESET}")
+    try:
+        while True:
+            try:
+                cmd = (await asyncio.to_thread(input, "\n› ")).strip().lower()
+            except EOFError:
+                break
+            if cmd in ("q", "/quit", "quit"):
+                break
+            speaker.interrupt()  # pressing talk while he speaks is a barge-in
+            print(f"\033[1A\r\033[K{BOLD}you ›{RESET} {DIM}listening…{RESET}", end="", flush=True)
+
+            def partial(text: str) -> None:
+                print(f"\r\033[K{BOLD}you ›{RESET} {DIM}{text}{RESET}", end="", flush=True)
+
+            heard = await ptt.capture(lambda: asyncio.to_thread(input), partial)
+            print(f"\033[1A\r\033[K{BOLD}you ›{RESET} {heard.transcript or DIM + '(nothing heard)' + RESET}")
+            if not heard.transcript:
+                continue
+            m = await _reply(brain, speaker, heard.transcript, t0=heard.t_release)
+            m.marks["stt_final"] = round(heard.final_ms, 1)
+            m.marks["stt_connect"] = round(heard.connect_ms, 1)
+            turn_log.write(m)
+            print(f"\n{DIM}{m.summary()}{RESET}")
+    finally:
+        speaker.interrupt()
+        await speaker.tts.close()
+        speaker.out.close()
+        mic.close()
         await brain.close()
         audit.close()
 
@@ -295,16 +349,43 @@ async def bench_tts(cfg: Config, n: int, play: bool) -> None:
     _table(n, rows, f"{cfg.tts.model} @ {cfg.tts.sample_rate} Hz -> {cfg.audio.output_rate} Hz out")
 
 
+async def bench_stt(cfg: Config, rounds: int, mode: str) -> None:
+    from .replay import load_fixtures, replay_one
+
+    stt = DeepgramFlux(cfg.stt, _require("DEEPGRAM_API_KEY"))
+    fixtures = load_fixtures()
+    connect, final, eager, errors = [], [], [], []
+    for r in range(rounds):
+        for name, expected, pcm in fixtures:
+            res = await replay_one(stt, name, expected, pcm, mode, cfg.stt.frame_ms, cfg.stt.sample_rate)
+            connect.append(res.connect_ms)
+            if res.final_ms is not None:
+                final.append(res.final_ms)
+            if res.eager_ms is not None:
+                eager.append(res.eager_ms)
+            errors.append(res.wer)
+            fin = f"{res.final_ms:.0f}ms" if res.final_ms is not None else "none"
+            print(f"{DIM}{name:<44} connect {res.connect_ms:4.0f}ms  final {fin:>7} ({res.trigger})  "
+                  f"wer {res.wer:.2f}  {res.transcript!r}{RESET}")
+    n = len(errors)
+    label = "speech end -> final (ForceEndTurn)" if mode == "ptt" else "speech end -> EndOfTurn (model)"
+    rows = [("connect (TLS + websocket)", connect), (label, final)] + ([("speech end -> EagerEndOfTurn", eager)] if eager else [])
+    _table(n, rows, f"{cfg.stt.model} @ {cfg.stt.region}, {mode}")
+    print(f"mean WER {sum(errors) / n:.3f} · finals {len(final)}/{n}")
+
+
 def _table(n: int, rows: list[tuple[str, list[float]]], note: str) -> None:
-    print(f"\n{'stage':<26}{'p50':>8}{'p95':>8}{'p99':>8}   (ms, n={n}, {note})")
+    w = max(26, *(len(name) + 2 for name, _ in rows))
+    print(f"\n{'stage':<{w}}{'p50':>8}{'p95':>8}{'p99':>8}   (ms, n={n}, {note})")
     for name, xs in rows:
-        print(f"{name:<26}" + "".join(f"{percentile(xs, p):>8.0f}" for p in (50, 95, 99)))
+        print(f"{name:<{w}}" + "".join(f"{percentile(xs, p):>8.0f}" for p in (50, 95, 99)))
 
 
 def main() -> None:
     p = argparse.ArgumentParser(prog="ultron")
     p.add_argument("--config-dir", type=Path, default=Path.cwd())
     sub = p.add_subparsers(dest="cmd", required=True)
+    sub.add_parser("talk", help="push-to-talk voice conversation")
     t = sub.add_parser("text", help="chat with Ultron in the terminal")
     t.add_argument("--mute", action="store_true", help="text only, no voice")
     s = sub.add_parser("say", help="speak one line")
@@ -323,12 +404,19 @@ def main() -> None:
     bt = sub.add_parser("bench-tts", help="measure TTS latency")
     bt.add_argument("--n", type=int, default=20)
     bt.add_argument("--play", action="store_true", help="also play audio and time the first sample at the speaker")
+    bs = sub.add_parser("bench-stt", help="measure STT latency by replaying recorded utterances")
+    bs.add_argument("--rounds", type=int, default=2)
+    bs.add_argument("--mode", choices=["ptt", "auto"], default="ptt", help="ptt = ForceEndTurn on release; auto = Flux turn detection")
+    bs.add_argument("--region", choices=["eu", "us"], default=None)
     args = p.parse_args()
 
     load_dotenv(args.config_dir / ".env")
     cfg = load_config(args.config_dir)
     try:
         match args.cmd:
+            case "talk":
+                _require("ANTHROPIC_API_KEY")
+                asyncio.run(talk(cfg))
             case "text":
                 _require("ANTHROPIC_API_KEY")
                 asyncio.run(text_mode(cfg, args.mute))
@@ -345,6 +433,10 @@ def main() -> None:
                 asyncio.run(bench_llm(cfg, args.n, args.gap, args.tier))
             case "bench-tts":
                 asyncio.run(bench_tts(cfg, args.n, args.play))
+            case "bench-stt":
+                if args.region:
+                    cfg = dataclasses.replace(cfg, stt=dataclasses.replace(cfg.stt, region=args.region))
+                asyncio.run(bench_stt(cfg, args.rounds, args.mode))
     except KeyboardInterrupt:
         pass
 
