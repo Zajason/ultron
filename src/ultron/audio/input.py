@@ -1,7 +1,7 @@
 """Microphone capture: native-rate PortAudio callback in, 16 kHz linear16 frames out.
 
-The callback only hands blocks to the event loop. Decimation (48 kHz -> 16 kHz) runs in the
-consumer, with an anti-alias filter that keeps state between blocks. Capturing at the device's
+The callback only hands blocks to the event loop. Downsampling to 16 kHz runs in the consumer,
+with an anti-alias filter that keeps state between blocks. Capturing at the device's
 native rate avoids CoreAudio's resampler and the latency it adds.
 """
 
@@ -14,25 +14,26 @@ import numpy as np
 import sounddevice as sd
 from pedalboard import LowpassFilter, Pedalboard
 
+from .resample import Resampler
 
-class Decimator:
-    """Integer-factor downsampler with an anti-alias low-pass and exact chunk continuity."""
+
+class Downsampler:
+    """Any-rate downsampler: anti-alias low-pass, then fractional resampling. Exact chunk continuity.
+    Mics run at 48 kHz (built-in, most USB), 44.1 kHz (some USB) or 24/16 kHz (Bluetooth)."""
 
     def __init__(self, in_rate: int, out_rate: int) -> None:
-        if in_rate % out_rate:
-            raise ValueError(f"{in_rate} Hz is not an integer multiple of {out_rate} Hz")
-        self.factor = in_rate // out_rate
+        if in_rate < out_rate:
+            raise ValueError(f"mic rate {in_rate} Hz is below the STT rate {out_rate} Hz")
         self.in_rate = in_rate
+        self.passthrough = in_rate == out_rate
         self.lp = Pedalboard([LowpassFilter(cutoff_frequency_hz=0.45 * out_rate) for _ in range(4)])
-        self._phase = 0  # index of the next kept sample within the incoming block
+        self.rs = Resampler(in_rate, out_rate)
 
     def process(self, x: np.ndarray) -> np.ndarray:
-        if x.size == 0:
+        x = x.astype(np.float32, copy=False)
+        if x.size == 0 or self.passthrough:
             return x
-        y = self.lp(x[np.newaxis, :].astype(np.float32, copy=False), self.in_rate, reset=False)[0]
-        out = y[self._phase :: self.factor]
-        self._phase = (self._phase - x.size) % self.factor
-        return out
+        return self.rs.process(self.lp(x[np.newaxis, :], self.in_rate, reset=False)[0])
 
 
 def to_linear16(x: np.ndarray) -> bytes:
@@ -86,7 +87,7 @@ class MicInput:
             self._q.put_nowait(None)
 
     async def frames(self):
-        dec = Decimator(self.capture_rate, self.out_rate)
+        dec = Downsampler(self.capture_rate, self.out_rate)
         pending = np.zeros(0, np.float32)
         while (block := await self._q.get()) is not None:
             pending = np.concatenate([pending, dec.process(block)])

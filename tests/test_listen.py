@@ -3,8 +3,9 @@
 import asyncio
 
 import numpy as np
+import pytest
 
-from ultron.audio.input import Decimator
+from ultron.audio.input import Downsampler
 from ultron.backends.stt import TurnEvent
 from ultron.listen import PushToTalk
 from ultron.replay import wer
@@ -95,24 +96,51 @@ async def test_nothing_said_returns_empty():
     assert heard.transcript == "" and stream.closed
 
 
-def test_decimator_keeps_speech_band_and_rejects_aliases():
-    sr_in, sr_out = 48000, 16000
+@pytest.mark.parametrize("sr_in", [48000, 44100, 24000])
+def test_downsampler_keeps_speech_band_and_rejects_aliases(sr_in):
     t = np.arange(sr_in) / sr_in
-    def level(hz):
-        y = Decimator(sr_in, sr_out).process(np.sin(2 * np.pi * hz * t).astype(np.float32))
-        return np.sqrt(np.mean(y[2000:] ** 2))
-    assert level(1000) > 0.6    # passband
-    assert level(12000) < 0.05  # would alias to 4 kHz without the filter
+    def out(hz):
+        return Downsampler(sr_in, 16000).process(np.sin(2 * np.pi * hz * t).astype(np.float32))
+    y = out(1000)
+    assert abs(y.size - 16000) <= 2
+    assert np.sqrt(np.mean(y[2000:] ** 2)) > 0.6     # passband
+    if sr_in > 20000:
+        assert np.sqrt(np.mean(out(11000)[2000:] ** 2)) < 0.05  # would alias into the speech band
 
 
-def test_decimator_chunked_equals_whole():
-    x = np.random.default_rng(1).standard_normal(48000).astype(np.float32)
-    whole = Decimator(48000, 16000).process(x)
-    d = Decimator(48000, 16000)
+def test_downsampler_passthrough_at_16k():
+    x = np.random.default_rng(2).standard_normal(1600).astype(np.float32)
+    np.testing.assert_array_equal(Downsampler(16000, 16000).process(x), x)
+
+
+@pytest.mark.parametrize("sr_in", [48000, 44100])
+def test_downsampler_chunked_equals_whole(sr_in):
+    x = np.random.default_rng(1).standard_normal(sr_in).astype(np.float32)
+    whole = Downsampler(sr_in, 16000).process(x)
+    d = Downsampler(sr_in, 16000)
     chunked = np.concatenate([d.process(x[i : i + 517]) for i in range(0, x.size, 517)])
-    np.testing.assert_allclose(chunked, whole, atol=1e-6)
+    n = min(whole.size, chunked.size)
+    assert abs(whole.size - chunked.size) <= 1
+    np.testing.assert_allclose(chunked[:n], whole[:n], atol=1e-5)
 
 
 def test_wer():
     assert wer("What do you think of humans?", "what do you think of humans") == 0
     assert abs(wer("What do you think of humans?", "What do you think of human") - 1 / 6) < 1e-9
+
+
+async def test_pump_failure_surfaces_before_release():
+    class BrokenMic(FakeMic):
+        async def frames(self):
+            raise ValueError("bad mic rate")
+            yield b""
+
+    release = asyncio.Event()  # never set: the error must not wait for the release
+    try:
+        await asyncio.wait_for(
+            PushToTalk(FakeSTT(FakeStream([])), BrokenMic([])).capture(release.wait), timeout=1.0
+        )
+    except ValueError as e:
+        assert "bad mic rate" in str(e)
+    else:
+        raise AssertionError("expected the mic error")

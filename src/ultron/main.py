@@ -1,6 +1,7 @@
 """CLI entrypoint.
 
   ultron talk          push-to-talk voice conversation (Enter to start/stop)
+  ultron mic-test      record a few seconds, play it back, and transcribe it
   ultron text          chat in the terminal, spoken aloud (--mute for text only)
   ultron say TEXT      speak one line
   ultron audition      play a sample line in each shortlisted voice
@@ -243,6 +244,59 @@ async def talk(cfg: Config) -> None:
         audit.close()
 
 
+async def mic_test(cfg: Config, seconds: float) -> None:
+    """Check each stage separately: device -> signal level -> what was captured -> transcript."""
+    import sounddevice as sd
+
+    from .replay import replay_one
+
+    print(f"{BOLD}Input devices{RESET}")
+    default = sd.query_devices(kind="input")["name"]
+    for i, d in enumerate(sd.query_devices()):
+        if d["max_input_channels"] > 0:
+            mark = "  ← in use" if d["name"] == (cfg.audio.input_device or default) else ""
+            print(f"  {i}: {d['name']} ({d['default_samplerate']:.0f} Hz){mark}")
+
+    mic = MicInput(cfg.stt.sample_rate, cfg.stt.frame_ms, cfg.audio.latency_ms, cfg.audio.input_device)
+    print(f"\n{BOLD}1. Recording {seconds:g}s from {mic.name} ({mic.capture_rate} Hz). Speak now…{RESET}")
+    mic.start()
+    frames: list[bytes] = []
+
+    async def collect():
+        async for f in mic.frames():
+            frames.append(f)
+
+    task = asyncio.create_task(collect())
+    for _ in range(int(seconds * 10)):
+        await asyncio.sleep(0.1)
+        bar = "█" * min(40, int(mic.level * 400))
+        print(f"\r   level {bar:<40}", end="", flush=True)
+    mic.stop()
+    await task
+    mic.close()
+    pcm = b"".join(frames)
+    audio = np.frombuffer(pcm, "<i2").astype(np.float32) / 32768
+    rms = float(np.sqrt(np.mean(audio**2))) if audio.size else 0.0
+    db = 20 * np.log10(max(rms, 1e-9))
+    print(f"\n   captured {audio.size / cfg.stt.sample_rate:.1f}s · peak {mic.peak:.3f} · rms {db:.0f} dBFS")
+    if mic.peak == 0:
+        print(f"{RED}   The OS delivered pure silence: microphone access is blocked for this app.{RESET}")
+        return
+    if db < -55:
+        print(f"{RED}   Very quiet: is this the mic you're speaking into? Pick another with --device.{RESET}")
+    wav = Path("~/.ultron/mic-test.wav").expanduser()
+    _write_wav(wav, audio, cfg.stt.sample_rate)
+
+    print(f"\n{BOLD}2. Playing back what was captured{RESET} {DIM}({wav}){RESET}")
+    sd.play(audio, cfg.stt.sample_rate)
+    await asyncio.to_thread(sd.wait)
+
+    print(f"\n{BOLD}3. Transcribing with Deepgram {cfg.stt.model} ({cfg.stt.region}){RESET}")
+    stt = DeepgramFlux(cfg.stt, _require("DEEPGRAM_API_KEY"))
+    res = await replay_one(stt, "mic-test", "", pcm, "ptt", cfg.stt.frame_ms, cfg.stt.sample_rate)
+    print(f"   heard: {res.transcript!r}" if res.transcript else f"{RED}   Deepgram heard no words.{RESET}")
+
+
 async def say(cfg: Config, text: str) -> None:
     speaker = _build_speaker(cfg)
     await speaker.tts.connect()
@@ -406,7 +460,11 @@ def main() -> None:
     p = argparse.ArgumentParser(prog="ultron")
     p.add_argument("--config-dir", type=Path, default=Path.cwd())
     sub = p.add_subparsers(dest="cmd", required=True)
-    sub.add_parser("talk", help="push-to-talk voice conversation")
+    tk = sub.add_parser("talk", help="push-to-talk voice conversation")
+    tk.add_argument("--device", help="input device name (or part of it) or index; default: system input")
+    mt = sub.add_parser("mic-test", help="record, play back and transcribe a few seconds of mic audio")
+    mt.add_argument("--device", help="input device name (or part of it) or index")
+    mt.add_argument("--seconds", type=float, default=4.0)
     t = sub.add_parser("text", help="chat with Ultron in the terminal")
     t.add_argument("--mute", action="store_true", help="text only, no voice")
     s = sub.add_parser("say", help="speak one line")
@@ -433,6 +491,9 @@ def main() -> None:
 
     load_dotenv(args.config_dir / ".env")
     cfg = load_config(args.config_dir)
+    if getattr(args, "device", None):
+        dev = int(args.device) if args.device.isdigit() else args.device
+        cfg = dataclasses.replace(cfg, audio=dataclasses.replace(cfg.audio, input_device=dev))
     try:
         match args.cmd:
             case "talk":
@@ -442,6 +503,8 @@ def main() -> None:
                 except Exception as e:
                     _log_error("ultron talk", e)
                     sys.exit(1)
+            case "mic-test":
+                asyncio.run(mic_test(cfg, args.seconds))
             case "text":
                 _require("ANTHROPIC_API_KEY")
                 asyncio.run(text_mode(cfg, args.mute))

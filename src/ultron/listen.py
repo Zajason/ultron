@@ -71,7 +71,15 @@ class PushToTalk:
         collecting = asyncio.create_task(collect())
         stream = None
         try:
-            await wait_release()
+            # Wait for the release, but fail at once if the mic pump or the STT connection breaks:
+            # otherwise the user talks into a dead pipe until they press the key again.
+            release = asyncio.ensure_future(wait_release())
+            await asyncio.wait({release, pumping, collecting}, return_when=asyncio.FIRST_COMPLETED)
+            for task in (pumping, collecting):
+                if task.done() and not task.cancelled() and task.exception():
+                    self.mic.stop()
+                    raise task.exception()
+            await release
             t_release = time.perf_counter()
             self.mic.stop()
             stream = await pumping  # the tail of the audio is sent before the end-of-turn signal
