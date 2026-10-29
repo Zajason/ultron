@@ -7,9 +7,9 @@ will wrap it in a frame processor, so both paths share one LLM/tool code path.
 from __future__ import annotations
 
 import asyncio
-import contextlib
 import time
 from collections.abc import Callable
+from datetime import datetime
 from typing import Any
 
 import httpx2
@@ -51,7 +51,6 @@ class Brain:
         self.plain = False
         self.menace = cfg.menace_level
         self._system = self._build_system()
-        self._keepwarm: asyncio.Task | None = None
 
     # -- prompt -------------------------------------------------------------------------------
 
@@ -91,20 +90,7 @@ class Brain:
         )
         return (time.perf_counter() - t0) * 1000
 
-    def start_keepwarm(self) -> None:
-        if self.llm.keepwarm_interval_s > 0 and self._keepwarm is None:
-            self._keepwarm = asyncio.create_task(self._keepwarm_loop())
-
-    async def _keepwarm_loop(self) -> None:
-        # A free metadata request keeps the pooled TLS connection open between turns.
-        while True:
-            await asyncio.sleep(self.llm.keepwarm_interval_s)
-            with contextlib.suppress(Exception):
-                await self.client.models.retrieve(self.llm.fast_model)
-
     async def close(self) -> None:
-        if self._keepwarm:
-            self._keepwarm.cancel()
         await self.client.close()
 
     # -- turns ----------------------------------------------------------------------------------
@@ -114,7 +100,10 @@ class Brain:
         self.plain = False
 
     def _add_user(self, text: str) -> None:
-        self.messages.append({"role": "user", "content": text})
+        # The clock rides on the user message, after the cached prefix: the model knows the time
+        # without a get_time round trip, and the system prompt stays byte-identical.
+        stamp = datetime.now().astimezone().strftime("%a %d %b %Y %H:%M")
+        self.messages.append({"role": "user", "content": f"[{stamp}] {text}"})
         # Mode switches go in as mid-conversation system messages, so the cached system prompt
         # (and everything before this point) stays byte-identical.
         mode = detect_mode_switch(text)

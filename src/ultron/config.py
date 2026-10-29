@@ -20,7 +20,6 @@ class LLMConfig:
     max_turns: int = 12
     max_tool_rounds: int = 5
     keepalive_expiry_s: float = 300
-    keepwarm_interval_s: float = 20
 
 
 @dataclass(frozen=True)

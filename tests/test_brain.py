@@ -84,6 +84,7 @@ async def test_simple_turn_streams_and_records_metrics(tmp_path):
     assert params["cache_control"] == {"type": "ephemeral"}
     assert params["thinking"] == {"type": "disabled"}
     assert "temperature" not in params
+    assert params["messages"][0]["content"].startswith("[") and params["messages"][0]["content"].endswith("] Good morning")
 
 
 async def test_tool_loop(tmp_path):
@@ -133,7 +134,7 @@ async def test_trim_in_batches_starting_at_a_user_turn(tmp_path):
         await brain.respond(f"q{i}")
     assert len(brain.messages) == 12
     await brain.respond("q6")  # 7 turns > 6: drop to 6 - 6 // 3 = 4 kept
-    users = [m["content"] for m in brain.messages if m["role"] == "user"]
+    users = [m["content"].split("] ", 1)[1] for m in brain.messages if m["role"] == "user"]
     assert users == ["q3", "q4", "q5", "q6"]
     assert brain.messages[0]["role"] == "user"
 

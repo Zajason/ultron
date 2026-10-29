@@ -51,7 +51,6 @@ async def text_mode(cfg: Config) -> None:
     brain, audit = _build(cfg, log_turns=True)
     print(f"{DIM}warming up…{RESET}", end=" ", flush=True)
     print(f"{DIM}{await brain.warm():.0f}ms · {cfg.llm.fast_model} · menace {brain.menace} · {HELP}{RESET}")
-    brain.start_keepwarm()
     try:
         while True:
             try:
@@ -98,13 +97,11 @@ BENCH_PROMPTS = [
 ]
 
 
-async def bench_llm(cfg: Config, n: int, gap: float, keepwarm: bool) -> None:
+async def bench_llm(cfg: Config, n: int, gap: float) -> None:
     brain, audit = _build(cfg, log_turns=False)
     warm_ms = await brain.warm()
-    if keepwarm:
-        brain.start_keepwarm()
     ttft, chunk, total, cache_hit = [], [], [], 0
-    print(f"{cfg.llm.fast_model} · thinking {cfg.llm.thinking} · effort {cfg.llm.effort} · keepwarm {keepwarm} · warm-up {warm_ms:.0f}ms")
+    print(f"{cfg.llm.fast_model} · thinking {cfg.llm.thinking} · effort {cfg.llm.effort} · warm-up {warm_ms:.0f}ms")
     try:
         for i, prompt in zip(range(n), itertools.cycle(BENCH_PROMPTS)):
             brain.reset()
@@ -136,7 +133,6 @@ def main() -> None:
     b = sub.add_parser("bench-llm", help="measure LLM latency over N fresh single-turn conversations")
     b.add_argument("--n", type=int, default=20)
     b.add_argument("--gap", type=float, default=0, help="idle seconds between turns (tests connection reuse)")
-    b.add_argument("--no-keepwarm", action="store_true", help="don't ping the API between turns")
     p.add_argument("--config-dir", type=Path, default=Path.cwd())
     args = p.parse_args()
 
@@ -147,7 +143,7 @@ def main() -> None:
         if args.cmd == "text":
             asyncio.run(text_mode(cfg))
         else:
-            asyncio.run(bench_llm(cfg, args.n, args.gap, not args.no_keepwarm))
+            asyncio.run(bench_llm(cfg, args.n, args.gap))
     except KeyboardInterrupt:
         pass
 

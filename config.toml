@@ -20,11 +20,9 @@ effort = "low"
 cache_ttl = "1h"                        # system prompt + tools; outlives idle gaps between voice turns
 max_turns = 12                          # rolling window of user turns kept verbatim
 max_tool_rounds = 5
-# The SDK's HTTP pool closes idle connections after 5 s by default, so the next turn pays a new
-# TLS handshake (several round trips to the US from Europe). Keep connections longer, and ping
-# a free endpoint so the server doesn't close them either.
+# The SDK closes idle pooled connections after 5 s. Measured from Athens, a fresh TLS connection
+# costs ~17 ms (Cloudflare edge in Athens), so this is a small win, not a big one.
 keepalive_expiry_s = 300
-keepwarm_interval_s = 20                # 0 disables
 
 [tools]
 max_auto_tier = 1                       # tiers above this need spoken/typed confirmation
