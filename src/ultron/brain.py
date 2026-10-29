@@ -8,7 +8,7 @@ from __future__ import annotations
 
 import asyncio
 import time
-from collections.abc import Callable
+from collections.abc import Awaitable, Callable
 from datetime import datetime
 from typing import Any
 
@@ -131,6 +131,40 @@ class Brain:
             self.plain = False
             self.messages.append({"role": "system", "content": PLAIN_OFF})
 
+    def checkpoint(self) -> tuple[int, bool]:
+        return len(self.messages), self.plain
+
+    def rollback(self, cp: tuple[int, bool]) -> None:
+        """Undo a turn completely (a speculative reply the user talked over before hearing it)."""
+        n, self.plain = cp
+        del self.messages[n:]
+
+    def set_last_reply(self, spoken: str) -> None:
+        """Replace the text of the last reply with what the user actually heard before cutting in,
+        so the history matches the conversation. Tool calls in it are kept."""
+        for msg in reversed(self.messages):
+            if msg["role"] != "assistant":
+                continue
+            blocks = msg["content"] if isinstance(msg["content"], list) else []
+            kept = [b for b in blocks if _block_type(b) != "text"]
+            text = (spoken.strip() + " —") if spoken.strip() else "—"
+            msg["content"] = [{"type": "text", "text": text}, *kept]
+            return
+
+    def _repair(self) -> None:
+        """After a cancelled turn: every tool_use needs a result, and the turn must end with a reply."""
+        last = self.messages[-1] if self.messages else None
+        if last and last["role"] == "assistant":
+            ids = [b.id for b in (last["content"] if isinstance(last["content"], list) else []) if _block_type(b) == "tool_use"]
+            if ids:
+                self.messages.append({"role": "user", "content": [
+                    {"type": "tool_result", "tool_use_id": i, "content": "cancelled: the user interrupted", "is_error": True}
+                    for i in ids
+                ]})
+                last = self.messages[-1]
+        if last and last["role"] != "assistant":
+            self.messages.append({"role": "assistant", "content": [{"type": "text", "text": "—"}]})
+
     def _trim(self) -> None:
         """Keep the last max_turns user turns. Trims in batches: every trim changes the cached
         prefix, so dropping several turns at once means fewer cache misses than one per turn."""
@@ -150,9 +184,12 @@ class Brain:
         on_chunk: OnText = lambda s: None,
         on_tool_start: OnEvent = lambda: None,
         t0: float | None = None,
+        tool_gate: Callable[[], Awaitable[object]] | None = None,
     ) -> TurnMetrics:
         """Run one user turn. on_text gets raw deltas (display), on_chunk gets speakable chunks
-        (TTS), on_tool_start fires once if a tool call starts before anything was said (filler)."""
+        (TTS), on_tool_start fires once if a tool call starts before anything was said (filler).
+        tool_gate, if given, is awaited before any tool runs: a speculative turn must not act
+        until the user has really finished. If the turn is cancelled, the history is repaired."""
         model = self.model_for(user_text, tier)
         m = TurnMetrics(transcript=user_text, model=model)
         if t0 is not None:
@@ -160,7 +197,6 @@ class Brain:
         self._add_user(user_text)
         self._trim()
         chunker = Chunker()
-        spoke = False
 
         def emit(delta: str) -> None:
             m.mark("first_token")
@@ -178,6 +214,16 @@ class Brain:
                 m.mark("tool_block")
                 on_tool_start()
 
+        try:
+            await self._turn(model, m, user_text, chunker, emit, speak, tool_block, on_text, tool_gate)
+        except asyncio.CancelledError:
+            self._repair()
+            raise
+        m.mark("done")
+        return m
+
+    async def _turn(self, model, m, user_text, chunker, emit, speak, tool_block, on_text, tool_gate) -> None:
+        spoke = False
         rounds = self.llm.max_tool_rounds
         for rnd in range(rounds + 1):
             if spoke:
@@ -200,11 +246,11 @@ class Brain:
                 break
             # Text before a tool call ("Opening it.") is speakable now, before the tool runs.
             speak(chunker.flush())
+            if tool_gate is not None:
+                await tool_gate()
             self.messages.append({"role": "user", "content": await self._run_tools(tool_uses, m, user_text)})
 
         speak(chunker.flush())
-        m.mark("done")
-        return m
 
     async def _stream_once(
         self, model: str, m: TurnMetrics, rnd: int, emit: OnText, tool_block: OnEvent, no_tools: bool = False
@@ -250,3 +296,7 @@ class Brain:
 
         # All results go back in one user message, in call order.
         return list(await asyncio.gather(*(one(b) for b in tool_uses)))
+
+
+def _block_type(b: Any) -> str | None:
+    return b.get("type") if isinstance(b, dict) else getattr(b, "type", None)

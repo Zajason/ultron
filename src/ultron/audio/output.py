@@ -25,6 +25,9 @@ class AudioOutput:
         self._idle.set()
         self._armed = False
         self.first_audio_at: float | None = None  # perf_counter time the first armed sample hits the DAC
+        self.on_render = None  # optional callable(block): sees every block played (echo reference)
+        self.played = 0  # samples handed to the device so far (speech and silence)
+        self.queued_until = 0  # sample position at which everything written so far will have played
         self._stream = sd.OutputStream(
             samplerate=self.sample_rate,
             channels=1,
@@ -50,6 +53,7 @@ class AudioOutput:
     def write(self, samples: np.ndarray) -> None:
         if samples.size:
             with self._lock:
+                self.queued_until = max(self.queued_until, self.played) + samples.size
                 self._q.append(samples.astype(np.float32, copy=False))
                 self._idle.clear()
 
@@ -57,6 +61,7 @@ class AudioOutput:
         with self._lock:
             self._q.clear()
             self._offset = 0
+            self.queued_until = self.played
             self._idle.set()
 
     def wait_idle(self, timeout: float | None = None) -> bool:
@@ -82,6 +87,9 @@ class AudioOutput:
             if not self._q:
                 self._idle.set()
         out[filled:] = 0.0
+        self.played += frames
+        if self.on_render is not None:
+            self.on_render(out)
         if self._armed and filled:
             # Time until this buffer reaches the DAC; CoreAudio reports it via the stream clock.
             dac_delay = time_info.outputBufferDacTime - time_info.currentTime

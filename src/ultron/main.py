@@ -1,5 +1,6 @@
 """CLI entrypoint.
 
+  ultron live          hands-free voice conversation (talk any time, interrupt him by speaking)
   ultron talk          push-to-talk voice conversation (Enter to start/stop)
   ultron mic-test      record a few seconds, play it back, and transcribe it
   ultron text          chat in the terminal, spoken aloud (--mute for text only)
@@ -8,6 +9,7 @@
   ultron bench-llm     LLM latency percentiles
   ultron bench-tts     TTS latency percentiles
   ultron bench-stt     STT latency over the recorded utterances (replay harness)
+  ultron bench-v2v     voice-to-voice latency: recorded utterance in -> first audio out
 """
 
 from __future__ import annotations
@@ -35,6 +37,10 @@ from .audio.speaker import Speaker
 from .backends import CartesiaTTS, DeepgramFlux
 from .brain import Brain
 from .config import Config, load_config
+from .audio.aec import EchoCanceller
+from .audio.devices import transports
+from .audio.vad import SileroVAD
+from .conversation import UI, Conversation
 from .listen import PushToTalk
 from .metrics import TurnLog, TurnMetrics, percentile
 from .persona import FILLER_LINES
@@ -56,7 +62,7 @@ CACHE_DIR = Path("~/.ultron/cache").expanduser()
 Announce = Callable[[str], Awaitable[None]]
 
 
-def _build(cfg: Config, announce: Announce | None = None) -> tuple[Brain, AuditLog]:
+def _build(cfg: Config, announce: Announce | None = None, dry_run: bool = False) -> tuple[Brain, AuditLog]:
     plat = get_platform()
 
     async def on_timer(label: str) -> None:
@@ -72,7 +78,7 @@ def _build(cfg: Config, announce: Announce | None = None) -> tuple[Brain, AuditL
     registry = Registry()
     register_builtin(registry, plat, Timers(on_timer), cfg.tools.notes_file)
     audit = AuditLog(cfg.tools.audit_log)
-    executor = Executor(registry, cfg.tools, audit, confirm)
+    executor = Executor(registry, cfg.tools, audit, confirm, dry_run=dry_run)
     return Brain(cfg, registry, executor), audit
 
 
@@ -193,6 +199,153 @@ async def text_mode(cfg: Config, mute: bool) -> None:
             speaker.out.close()
         await brain.close()
         audit.close()
+
+
+def _aec_for(cfg: Config, speaker: Speaker, mic) -> EchoCanceller | None:
+    mode = cfg.audio.aec
+    if mode == "off":
+        return None
+    if mode == "auto":
+        out_name = cfg.audio.output_device or __import__("sounddevice").query_devices(kind="output")["name"]
+        if transports().get((out_name, "output")) == "bluetooth":
+            return None  # headphones: no acoustic echo path
+    delay = int(speaker.out.device_latency_ms + mic.device_latency_ms)
+    aec = EchoCanceller(cfg.stt.sample_rate, speaker.out.sample_rate, delay)
+    speaker.out.on_render = aec.on_render
+    return aec
+
+
+def _vad(cfg: Config, mic) -> SileroVAD:
+    v = cfg.vad
+    return SileroVAD(v.threshold, v.start_ms, v.stop_ms, mic.device_latency_ms, cfg.stt.sample_rate)
+
+
+def _terminal_ui() -> UI:
+    state = {"partial": False}
+
+    def partial(text: str) -> None:
+        state["partial"] = True
+        print(f"\r\033[K{DIM}you › {text}{RESET}", end="", flush=True)
+
+    def heard(text: str) -> None:
+        print(f"\r\033[K{BOLD}you ›{RESET} {text}", flush=True)
+        state["partial"] = False
+
+    def reply_start() -> None:
+        print(f"{BOLD}ultron ›{RESET} ", end="", flush=True)
+
+    def reply_done(m: TurnMetrics, interrupted: bool) -> None:
+        print(f"\n{DIM}{m.summary()}{RESET}", flush=True)
+
+    def note(text: str) -> None:
+        print(f"\n{DIM}{text}{RESET}", flush=True)
+
+    return UI(partial, heard, reply_start, lambda s: print(s, end="", flush=True), reply_done, note)
+
+
+async def live(cfg: Config) -> None:
+    """Hands-free: speak whenever you like; speaking over Ultron stops him."""
+    mic = _open_mic(cfg)
+    speaker = _build_speaker(cfg)
+
+    async def announce(line: str) -> None:
+        if not speaker.out.busy:
+            await speaker.say_line(line)
+
+    brain, audit = _build(cfg, announce)
+    print(f"{DIM}warming up…{RESET}", end=" ", flush=True)
+    ready = [f"llm {await brain.warm():.0f}ms", await _start_speaker(speaker, cfg),
+             f"mic {mic.name}", f"out {speaker.out.sample_rate} Hz"]
+    aec = _aec_for(cfg, speaker, mic)
+    ready.append("echo cancel on" if aec else "echo cancel off (headphones)")
+    eager = cfg.stt.eager_eot_threshold > 0
+    ready.append(f"early start {'on' if eager else 'off'}")
+    print(f"{DIM}{' · '.join(ready)}{RESET}")
+    print(f"{DIM}Listening. Just talk. Type q then Enter to quit.{RESET}")
+    convo = Conversation(brain, speaker, mic, DeepgramFlux(cfg.stt, _require("DEEPGRAM_API_KEY")),
+                         _vad(cfg, mic), aec, eager, cfg.stt.frame_ms, TurnLog(cfg.turns_log), _terminal_ui())
+
+    async def quit_on_q():
+        while (await asyncio.to_thread(input)).strip().lower() not in ("q", "quit", "/quit"):
+            pass
+        convo.stop()
+
+    q = asyncio.create_task(quit_on_q())
+    try:
+        await convo.run()
+    finally:
+        q.cancel()
+        if convo.barge_ins:
+            xs = convo.barge_ins
+            print(f"{DIM}barge-in stop latency: p50 {percentile(xs, 50):.0f} ms, max {max(xs):.0f} ms (n={len(xs)}){RESET}")
+        speaker.interrupt()
+        await speaker.tts.close()
+        speaker.out.close()
+        mic.close()
+        await brain.close()
+        audit.close()
+
+
+async def bench_v2v(cfg: Config, rounds: int) -> None:
+    """Replay the recorded utterances through the full hands-free pipeline; time from the end of
+    each utterance to Ultron's first audio at the speaker."""
+    from .replay import ReplayMic, load_fixtures
+
+    speaker = _build_speaker(cfg)
+    brain, audit = _build(cfg, dry_run=True)  # the replayed requests must not really open apps or set timers
+    await brain.warm()
+    await _start_speaker(speaker, cfg)
+    mic = ReplayMic(cfg.stt.sample_rate)
+    eager = cfg.stt.eager_eot_threshold > 0
+    convo = Conversation(brain, speaker, mic, DeepgramFlux(cfg.stt, _require("DEEPGRAM_API_KEY")),
+                         _vad(cfg, mic), None, eager, cfg.stt.frame_ms)
+    rows: dict[str, list[float]] = {k: [] for k in ("eot", "ttft", "tts", "v2v", "v2v_haiku", "v2v_sonnet")}
+    spec = 0
+    run = asyncio.create_task(convo.run())
+    await asyncio.sleep(1.0)
+    try:
+        for _ in range(rounds):
+            for name, text, pcm in load_fixtures():
+                brain.reset()
+                done = convo.turns_done
+                results: list[TurnMetrics] = []
+                convo.ui = UI(reply_done=lambda m, i: results.append(m))
+                mic.say(pcm)
+                for _ in range(300):
+                    if convo.turns_done > done:
+                        break
+                    await asyncio.sleep(0.05)
+                await asyncio.to_thread(speaker.out.wait_idle, 30)
+                if not results or mic.t_speech_end is None:
+                    why = f": {convo.errors[-1]!r}" if convo.errors else ""
+                    print(f"{DIM}{name}: no reply{why}{RESET}")
+                    continue
+                m = results[0]
+                end = mic.t_speech_end  # true end of speech, not an estimate
+                shift = (m.t0 - end) * 1000  # turn marks are relative to the VAD estimate; rebase
+                fa = m.marks.get("first_audio")
+                if fa is None:
+                    continue
+                v2v = fa + shift
+                rows["v2v"].append(v2v)
+                rows["v2v_haiku" if "haiku" in m.model else "v2v_sonnet"].append(v2v)
+                if "first_token" in m.marks:
+                    rows["ttft"].append(m.marks["first_token"] + shift)
+                spec += int(m.marks.get("speculative", 0))
+                print(f"{DIM}{name:<44} {m.model.removeprefix('claude-')[:6]:<7} v2v {v2v:5.0f}ms  "
+                      f"{'eager ' if m.marks.get('speculative') else ''}t0 err {shift:+.0f}ms{RESET}")
+                await asyncio.sleep(0.5)
+    finally:
+        convo.stop()
+        await run
+        await speaker.tts.close()
+        speaker.out.close()
+        await brain.close()
+        audit.close()
+    n = len(rows["v2v"])
+    _table(n, [("voice-to-voice (all)", rows["v2v"]), ("  haiku turns", rows["v2v_haiku"]),
+               ("  sonnet turns", rows["v2v_sonnet"]), ("end of speech -> first token", rows["ttft"])],
+           f"early start {'on' if eager else 'off'}, {spec}/{n} speculative")
 
 
 async def talk(cfg: Config) -> None:
@@ -471,6 +624,11 @@ def main() -> None:
     p = argparse.ArgumentParser(prog="ultron")
     p.add_argument("--config-dir", type=Path, default=Path.cwd())
     sub = p.add_subparsers(dest="cmd", required=True)
+    lv = sub.add_parser("live", help="hands-free voice conversation")
+    lv.add_argument("--device", help="input device name (or part of it) or index; default: automatic")
+    bv = sub.add_parser("bench-v2v", help="voice-to-voice latency via the replay harness")
+    bv.add_argument("--rounds", type=int, default=1)
+    bv.add_argument("--no-eager", action="store_true", help="disable the early start on EagerEndOfTurn")
     tk = sub.add_parser("talk", help="push-to-talk voice conversation")
     tk.add_argument("--device", help="input device name (or part of it) or index; default: system input")
     mt = sub.add_parser("mic-test", help="record, play back and transcribe a few seconds of mic audio")
@@ -507,6 +665,17 @@ def main() -> None:
         cfg = dataclasses.replace(cfg, audio=dataclasses.replace(cfg.audio, input_device=dev))
     try:
         match args.cmd:
+            case "live":
+                _require("ANTHROPIC_API_KEY")
+                try:
+                    asyncio.run(live(cfg))
+                except Exception as e:
+                    _log_error("ultron live", e)
+                    sys.exit(1)
+            case "bench-v2v":
+                if args.no_eager:
+                    cfg = dataclasses.replace(cfg, stt=dataclasses.replace(cfg.stt, eager_eot_threshold=0.0))
+                asyncio.run(bench_v2v(cfg, args.rounds))
             case "talk":
                 _require("ANTHROPIC_API_KEY")
                 try:

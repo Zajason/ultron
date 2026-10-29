@@ -19,6 +19,7 @@ class Utterance(Protocol):
     async def end(self) -> None: ...
     async def cancel(self) -> None: ...
     def audio(self) -> AsyncIterator[np.ndarray]: ...
+    def events(self) -> AsyncIterator[tuple[str, Any]]: ...  # ("audio", ndarray) | ("words", [(word, end_s)])
 
 
 class TTSBackend(Protocol):
@@ -49,12 +50,20 @@ class CartesiaUtterance:
     async def cancel(self) -> None:
         await self._ctx.cancel()
 
-    async def audio(self) -> AsyncIterator[np.ndarray]:
+    async def events(self) -> AsyncIterator[tuple[str, Any]]:
         async for r in self._ctx.receive():
             if r.type == "chunk" and r.audio:
-                yield np.frombuffer(r.audio, dtype=np.float32)
+                yield "audio", np.frombuffer(r.audio, dtype=np.float32)
+            elif r.type == "timestamps" and getattr(r, "word_timestamps", None):
+                wt = r.word_timestamps
+                yield "words", list(zip(wt.words, wt.end))
             elif r.type == "error":
                 raise RuntimeError(f"Cartesia: {getattr(r, 'message', None) or getattr(r, 'title', r)}")
+
+    async def audio(self) -> AsyncIterator[np.ndarray]:
+        async for kind, value in self.events():
+            if kind == "audio":
+                yield value
 
 
 class CartesiaTTS:
@@ -96,6 +105,7 @@ class CartesiaTTS:
             generation_config=gen,
             # We send whole clauses ourselves. The default (3000 ms) makes the server wait for more.
             max_buffer_delay_ms=0,
+            add_timestamps=True,  # word end times: what was actually heard when interrupted
         )
 
     async def utterance(self) -> CartesiaUtterance:

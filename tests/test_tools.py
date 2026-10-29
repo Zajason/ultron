@@ -122,3 +122,11 @@ async def test_output_truncated(tmp_path):
 def test_validate_args_non_dict():
     t = Tool("t", "", {}, (), Tier.READ, echo)
     assert validate_args(t, "x")
+
+
+async def test_dry_run_skips_side_effects(tmp_path):
+    ex, asked, log = make(tmp_path)
+    ex.dry_run = True
+    assert (await ex.run("write", {})).content == "done"      # tier 1: pretend
+    assert (await ex.run("read", {"n": 2})).content == '{"n": 2}'  # tier 0: real (no side effects)
+    assert audit_lines(log)[-2]["tool"] == "write"

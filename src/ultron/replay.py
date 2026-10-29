@@ -16,6 +16,8 @@ import wave
 from dataclasses import dataclass
 from pathlib import Path
 
+import numpy as np
+
 from .backends import DeepgramFlux, TurnEvent
 
 FIXTURES = Path(__file__).resolve().parents[2] / "tests" / "fixtures" / "utterances"
@@ -111,3 +113,53 @@ async def replay_one(stt: DeepgramFlux, name: str, expected: str, pcm: bytes, mo
         )
     finally:
         await stream.close()
+
+
+class ReplayMic:
+    """Stands in for MicInput: real-time 10 ms blocks of silence, with utterances injected on demand.
+    t_speech_end is when the last speech sample was delivered: the 'user stopped talking' moment."""
+
+    def __init__(self, out_rate: int = 16000) -> None:
+        self.out_rate = out_rate
+        self.name = "replay"
+        self.level = self.peak = 0.0
+        self.device_latency_ms = 0.0
+        self._pending: list[np.ndarray] = []
+        self._running = False
+        self.t_speech_end: float | None = None
+
+    def open(self) -> None:
+        pass
+
+    def start(self) -> None:
+        self._running = True
+
+    def stop(self) -> None:
+        self._running = False
+
+    def close(self) -> None:
+        pass
+
+    def say(self, pcm: bytes) -> None:
+        self._pending.append(np.frombuffer(pcm, "<i2").astype(np.float32) / 32768)
+        self.t_speech_end = None
+
+    async def blocks(self):
+        step = self.out_rate // 100
+        start = time.perf_counter()
+        n = 0
+        speech = np.zeros(0, np.float32)
+        while self._running:
+            if speech.size == 0 and self._pending:
+                speech = self._pending.pop(0)
+            if speech.size:
+                block, speech = speech[:step], speech[step:]
+                if block.size < step:
+                    block = np.concatenate([block, np.zeros(step - block.size, np.float32)])
+                if speech.size == 0:
+                    self.t_speech_end = start + (n + 1) * step / self.out_rate
+            else:
+                block = np.zeros(step, np.float32)
+            n += 1
+            await asyncio.sleep(max(0.0, start + n * step / self.out_rate - time.perf_counter()))
+            yield block

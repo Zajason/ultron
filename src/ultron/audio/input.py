@@ -97,6 +97,12 @@ class MicInput:
         if self._loop:
             self._loop.call_soon_threadsafe(self._q.put_nowait, None)
 
+    async def blocks(self):
+        """Continuous capture as downsampled float32 blocks of whatever size arrives (for AEC/VAD)."""
+        dec = Downsampler(self.capture_rate, self.out_rate)
+        while (block := await self._q.get()) is not None:
+            yield dec.process(block)
+
     async def frames(self):
         dec = Downsampler(self.capture_rate, self.out_rate)
         pending = np.zeros(0, np.float32)

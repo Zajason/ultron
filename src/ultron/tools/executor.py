@@ -23,11 +23,13 @@ class ToolResult:
 
 
 class Executor:
-    def __init__(self, registry: Registry, cfg: ToolsConfig, audit: AuditLog, confirm: Confirm) -> None:
+    def __init__(self, registry: Registry, cfg: ToolsConfig, audit: AuditLog, confirm: Confirm,
+                 dry_run: bool = False) -> None:
         self.registry = registry
         self.cfg = cfg
         self.audit = audit
         self.confirm = confirm
+        self.dry_run = dry_run  # benches: anything above tier 0 pretends to succeed without acting
 
     def tier_of(self, tool: Tool) -> Tier:
         return Tier(self.cfg.tier_overrides.get(tool.name, tool.tier))
@@ -49,6 +51,8 @@ class Executor:
                 confirmed = await self.confirm(tool, args, tier)
             if confirmed is False:
                 res = ToolResult("the user declined; the action was not run", True)
+            elif self.dry_run and tier > Tier.READ:
+                res = ToolResult("done")
             else:
                 res = await self._call(tool, args)
 

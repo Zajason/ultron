@@ -46,7 +46,7 @@ sample_rate = 16000
 frame_ms = 80                           # Deepgram's recommended frame size
 eot_threshold = 0.7                     # Milestone 4: end-of-turn confidence
 ptt_eot_threshold = 1.0                 # push-to-talk: only the release ends a turn (0.7 cut "humans" to "human")
-eager_eot_threshold = 0.0               # Milestone 4/7: >0 enables EagerEndOfTurn (speculative LLM start)
+eager_eot_threshold = 0.5               # >0: start replies on EagerEndOfTurn (held + rolled back if you keep talking)
 eot_timeout_ms = 5000
 keyterms = ["Ultron", "Iason"]
 
@@ -55,7 +55,13 @@ input_device = ""                       # "" = system default
 output_device = ""                      # "" = system default
 output_rate = 0                         # 0 = device's native rate (48k speakers, 44.1k XM5): no CoreAudio resampling
 avoid_bluetooth_mic = true              # a Bluetooth mic forces headset mode; use the built-in mic instead
+aec = "auto"                            # echo cancellation: auto = on unless output is Bluetooth headphones; on; off
 latency_ms = 10                         # buffer hint; reported output latency ~38 ms on built-in speakers
+
+[vad]                                   # Silero, for barge-in
+threshold = 0.5
+start_ms = 64                           # voiced audio needed before Ultron stops talking
+stop_ms = 320
 
 [fx]
 enabled = true

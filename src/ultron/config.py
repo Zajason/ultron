@@ -56,9 +56,16 @@ class STTConfig:
     frame_ms: int = 80
     eot_threshold: float = 0.7
     ptt_eot_threshold: float = 1.0
-    eager_eot_threshold: float = 0.0
+    eager_eot_threshold: float = 0.5
     eot_timeout_ms: int = 5000
     keyterms: tuple[str, ...] = ("Ultron", "Iason")
+
+
+@dataclass(frozen=True)
+class VADConfig:
+    threshold: float = 0.5
+    start_ms: int = 64
+    stop_ms: int = 320
 
 
 @dataclass(frozen=True)
@@ -67,6 +74,7 @@ class AudioConfig:
     output_device: str = ""
     output_rate: int = 0
     avoid_bluetooth_mic: bool = True
+    aec: str = "auto"
     latency_ms: float = 10
 
 
@@ -92,6 +100,7 @@ class Config:
     tools: ToolsConfig = field(default_factory=ToolsConfig)
     tts: TTSConfig = field(default_factory=TTSConfig)
     stt: STTConfig = field(default_factory=STTConfig)
+    vad: VADConfig = field(default_factory=VADConfig)
     audio: AudioConfig = field(default_factory=AudioConfig)
     fx: FXConfig = field(default_factory=FXConfig)
     turns_log: Path = Path("~/.ultron/turns.jsonl")
@@ -138,6 +147,7 @@ def load_config(root: Path | None = None) -> Config:
         tts=TTSConfig(**raw.get("tts", {})),
         stt=STTConfig(**{k: tuple(v) if isinstance(v, list) else v for k, v in raw.get("stt", {}).items()}),
         audio=AudioConfig(**raw.get("audio", {})),
+        vad=VADConfig(**raw.get("vad", {})),
         fx=FXConfig(**raw.get("fx", {})),
         turns_log=_path(raw.get("metrics", {}).get("turns_log", "~/.ultron/turns.jsonl")),
     )
