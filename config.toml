@@ -31,12 +31,12 @@ keepalive_expiry_s = 300
 enabled = true                          # `ultron text --mute` turns voice off for one session
 provider = "cartesia"
 model = "sonic-3.6-2026-08-27"          # dated snapshot: the voice won't drift under us
-voice_id = "d2c66146-c1c8-4c3a-9870-38e5a6b72442"   # Lawson; pick yours with `ultron audition`
+voice_id = "ed82c17b-4704-4d34-be43-5d19065acdf1"   # Carl, "menace" preset; compare others with `ultron audition`
 sample_rate = 24000                     # measured: 83 ms p50 first audio vs 103 ms at 44.1 kHz
-speed = 0.9                             # 0.6-1.5; unhurried
-emotion = ""                            # optional Cartesia emotion, e.g. "calm", "contemplative"
+speed = 0.85                            # 0.6-1.5; slow and controlled
+emotion = "mysterious"                  # Cartesia emotion; "" lets it infer from the text
 ellipsis_ms = 400                       # pause for the persona's "…"
-pitch_semitones = 0.0                   # varispeed playback: lower = deeper and heavier, zero latency
+pitch_semitones = -1.5                  # varispeed playback: lower = deeper and heavier, zero latency
 
 [audio]
 output_device = ""                      # "" = system default
@@ -45,14 +45,14 @@ latency_ms = 10                         # buffer hint; reported output latency ~
 
 [fx]
 enabled = true
-compress = false                        # close-mic density
-warmth_db = 3.0                         # low-shelf boost
-warmth_hz = 220.0
-rasp = 0.0                              # parallel saturation on the upper mids
-reverb_wet = 0.08                       # short, small-room plate
-metal_mix = 0.12                        # ring-mod + chorus layer, mixed under the dry voice
+compress = true                         # close-mic density
+warmth_db = 5.0                         # low-shelf boost
+warmth_hz = 160.0
+rasp = 0.08                             # parallel saturation on the upper mids
+reverb_wet = 0.03                       # nearly dry: menace is close, not echoey
+metal_mix = 0.08                        # ring-mod + chorus layer, mixed under the dry voice
 metal_hz = 60.0                         # ring-mod carrier
-sub_mix = 0.0                           # octave-down machine double
+sub_mix = 0.12                          # octave-down machine double
 gain = 1.0
 
 [tools]
