@@ -69,7 +69,12 @@ class Brain:
         self._system = self._build_system()
 
     def _params(self, model: str) -> dict[str, Any]:
-        thinking = {"type": "disabled"} if self.llm.thinking == "disabled" else {"type": "adaptive"}
+        if self.llm.thinking == "adaptive":
+            thinking = {"type": "adaptive"}
+        elif model.startswith("claude-sonnet-5-5"):
+            thinking = {"type": "between_tools"}  # Sonnet 5.5 rejects "disabled"; this is its off switch
+        else:
+            thinking = {"type": "disabled"}
         return {
             "model": model,
             "max_tokens": self.llm.max_tokens,

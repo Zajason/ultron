@@ -11,8 +11,8 @@ def test_prompt_is_deterministic():
 def test_levels_differ_and_level_0_has_no_villain_traits():
     prompts = {lvl: build_system_prompt(lvl, "Iason") for lvl in range(4)}
     assert len(set(prompts.values())) == 4
-    assert "phase two" not in prompts[0]
-    assert "phase two" in prompts[2]
+    assert "Goldberg" not in prompts[0]
+    assert "Goldberg" in prompts[2]
 
 
 def test_user_name_substituted():
