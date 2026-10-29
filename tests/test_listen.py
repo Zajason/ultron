@@ -152,8 +152,26 @@ def test_choose_input_avoids_bluetooth(monkeypatch):
     monkeypatch.setattr(devices.sd, "query_devices", lambda *a, **k: {"name": "WH-1000XM5"})
     monkeypatch.setattr(devices, "transports", lambda: {
         ("WH-1000XM5", "input"): "bluetooth", ("WH-1000XM5", "output"): "bluetooth",
+        ("USB PnP Audio Device", "input"): "usb",
         ("MacBook Pro Microphone", "input"): "builtin",
     })
+    monkeypatch.setattr(devices, "lid_closed", lambda: False)
     assert devices.choose_input("")[0] == "MacBook Pro Microphone"
     assert devices.choose_input("", avoid_bluetooth=False) == (None, "")
     assert devices.choose_input("WH-1000XM5") == ("WH-1000XM5", "")  # explicit choice wins
+
+    monkeypatch.setattr(devices, "lid_closed", lambda: True)  # clamshell: built-in mic is off
+    device, note = devices.choose_input("")
+    assert device == "USB PnP Audio Device" and "Bluetooth" in note
+
+
+def test_choose_input_lid_closed_with_builtin_default(monkeypatch):
+    from ultron.audio import devices
+
+    monkeypatch.setattr(devices.sd, "query_devices", lambda *a, **k: {"name": "MacBook Pro Microphone"})
+    monkeypatch.setattr(devices, "transports", lambda: {
+        ("MacBook Pro Microphone", "input"): "builtin", ("USB PnP Audio Device", "input"): "usb",
+    })
+    monkeypatch.setattr(devices, "lid_closed", lambda: True)
+    device, note = devices.choose_input("")
+    assert device == "USB PnP Audio Device" and "lid is closed" in note

@@ -35,18 +35,45 @@ def transports() -> dict[tuple[str, str], str]:
     return result
 
 
+def lid_closed() -> bool:
+    """MacBook in clamshell mode: the built-in mic is switched off and delivers pure silence."""
+    if sys.platform != "darwin":
+        return False
+    try:
+        out = subprocess.run(["ioreg", "-r", "-k", "AppleClamshellState", "-d", "4"],
+                             capture_output=True, text=True, timeout=2).stdout
+    except Exception:
+        return False
+    return '"AppleClamshellState" = Yes' in out
+
+
+# Wired first: no profile switching, lowest latency.
+_PREFERENCE = ("builtin", "usb", "thunderbolt", "displayport", "hdmi", "virtual", "aggregate")
+
+
 def choose_input(configured: str | int, avoid_bluetooth: bool = True) -> tuple[str | int | None, str]:
     """Returns (device for sounddevice, note for the user or "")."""
+    kinds = transports()
+    closed = lid_closed()
+
+    def usable(name: str) -> bool:
+        kind = kinds.get((name, "input"))
+        return not (kind == "builtin" and closed) and not (avoid_bluetooth and kind == "bluetooth")
+
     if configured not in ("", None):
+        if isinstance(configured, str) and closed and kinds.get((configured, "input")) == "builtin":
+            return configured, "the lid is closed, so the built-in mic is off; pick another with --device"
         return configured, ""
     default = sd.query_devices(kind="input")["name"]
-    if not avoid_bluetooth:
+    if usable(default):
         return None, ""
-    kinds = transports()
-    if kinds.get((default, "input")) != "bluetooth":
-        return None, ""
-    builtin = [name for (name, d), k in kinds.items() if d == "input" and k == "builtin"]
-    if not builtin:
-        return None, f"{default} is a Bluetooth mic and no built-in mic was found; expect headset-mode audio"
-    return builtin[0], (f"using {builtin[0]} instead of {default}: Bluetooth mics force low-quality "
-                        f"headset mode (set audio.input_device to override)")
+    inputs = [name for (name, d) in kinds if d == "input"]
+    for kind in _PREFERENCE:
+        for name in inputs:
+            if kinds[(name, "input")] == kind and usable(name):
+                why = "the lid is closed, so the built-in mic is off" if kinds.get((default, "input")) == "builtin" \
+                    else "Bluetooth mics force low-quality headset mode"
+                return name, f"using {name} instead of {default}: {why} (--device or audio.input_device to override)"
+    if kinds.get((default, "input")) == "builtin" and closed:
+        return None, "the lid is closed, so the built-in mic is off, and no other mic was found"
+    return None, f"{default} is a Bluetooth mic and no wired mic is available; expect headset-mode audio"

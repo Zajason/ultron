@@ -236,8 +236,8 @@ async def talk(cfg: Config) -> None:
             print(f"\033[1A\r\033[K{BOLD}you ›{RESET} {heard.transcript or DIM + '(nothing heard)' + RESET}")
             if not heard.transcript:
                 if mic.peak < 1e-4:
-                    print(f"{RED}The microphone is sending silence.{RESET} {DIM}Allow your terminal app under System Settings → "
-                          f"Privacy & Security → Microphone, then restart the terminal. Input device: {mic.name}{RESET}")
+                    print(f"{RED}{mic.name} is sending pure silence.{RESET} {DIM}It may be off (built-in mic with the lid "
+                          f"closed) or the terminal lacks microphone access. Choose another with --device.{RESET}")
                 continue
             try:
                 m = await _reply(brain, speaker, heard.transcript, t0=heard.t_release)
@@ -290,7 +290,8 @@ async def mic_test(cfg: Config, seconds: float) -> None:
     db = 20 * np.log10(max(rms, 1e-9))
     print(f"\n   captured {audio.size / cfg.stt.sample_rate:.1f}s · peak {mic.peak:.3f} · rms {db:.0f} dBFS")
     if mic.peak == 0:
-        print(f"{RED}   The OS delivered pure silence: microphone access is blocked for this app.{RESET}")
+        print(f"{RED}   The OS delivered pure silence.{RESET} {DIM}Either this mic is off (a MacBook's built-in mic is "
+              f"off while the lid is closed) or the terminal lacks microphone access. Try --device.{RESET}")
         return
     if db < -55:
         print(f"{RED}   Very quiet: is this the mic you're speaking into? Pick another with --device.{RESET}")
