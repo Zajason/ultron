@@ -19,6 +19,7 @@ from ..config import TTSConfig
 from ..text.normalize import normalize, pause_markup
 from .fx import VoiceFX
 from .output import AudioOutput
+from .resample import Resampler
 
 _END = object()
 
@@ -29,6 +30,7 @@ class Speaker:
         self.out = out
         self.fx = fx
         self.cfg = cfg
+        self.resampler = Resampler(tts.sample_rate, out.sample_rate, cfg.pitch_semitones)
         self.fillers: dict[str, np.ndarray] = {}
         self._recent_fillers: deque[str] = deque(maxlen=6)
         self._q: asyncio.Queue | None = None
@@ -96,7 +98,7 @@ class Speaker:
         async for audio in utt.audio():
             if self.t_first_byte is None:
                 self.t_first_byte = time.perf_counter()
-            self.out.write(self.fx.process(audio) if self.fx else audio)
+            self.out.write(self.render(audio))
 
     # -- one-off lines and fillers --------------------------------------------------------------
 
@@ -113,6 +115,10 @@ class Speaker:
             return None
         line = random.choice(choices)
         self._recent_fillers.append(line)
-        clip = self.fillers[line]
-        self.out.write(self.fx.process(clip) if self.fx else clip)
+        self.out.write(self.render(self.fillers[line]))
         return line
+
+    def render(self, audio: np.ndarray) -> np.ndarray:
+        """TTS-rate audio -> output-rate audio, with varispeed and FX."""
+        audio = self.resampler.process(audio)
+        return self.fx.process(audio) if self.fx else audio

@@ -10,6 +10,7 @@ from typing import Any, Protocol
 import numpy as np
 from cartesia import AsyncCartesia
 
+from ..audio.resample import varispeed_ratio
 from ..config import TTSConfig
 
 
@@ -27,6 +28,11 @@ class TTSBackend(Protocol):
     async def utterance(self) -> Utterance: ...
     async def synthesize(self, text: str) -> np.ndarray: ...
     async def close(self) -> None: ...
+
+
+def tts_speed(cfg: TTSConfig) -> float:
+    """Speed to request so the configured speaking rate survives varispeed playback."""
+    return round(min(1.5, max(0.6, cfg.speed / varispeed_ratio(cfg.pitch_semitones))), 3)
 
 
 class CartesiaUtterance:
@@ -79,7 +85,7 @@ class CartesiaTTS:
         await self.connect()
 
     def _context(self) -> Any:
-        gen: dict[str, Any] = {"speed": self.cfg.speed}
+        gen: dict[str, Any] = {"speed": tts_speed(self.cfg)}
         if self.cfg.emotion:
             gen["emotion"] = self.cfg.emotion
         return self._ws.context(

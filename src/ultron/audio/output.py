@@ -15,7 +15,7 @@ import sounddevice as sd
 
 
 class AudioOutput:
-    def __init__(self, sample_rate: int, block_ms: int = 10, device: str | int | None = None) -> None:
+    def __init__(self, sample_rate: int, latency_ms: float = 10, device: str | int | None = None) -> None:
         self.sample_rate = sample_rate
         self._q: collections.deque[np.ndarray] = collections.deque()
         self._offset = 0  # samples already played from _q[0]
@@ -28,8 +28,8 @@ class AudioOutput:
             samplerate=sample_rate,
             channels=1,
             dtype="float32",
-            blocksize=int(sample_rate * block_ms / 1000),
-            latency="low",
+            blocksize=0,  # let CoreAudio pick per-callback sizes; with a small latency hint that is lowest
+            latency=latency_ms / 1000,
             device=device or None,
             callback=self._callback,
         )

@@ -14,7 +14,7 @@ from ..text.normalize import normalize, pause_markup
 
 
 def _key(cfg: TTSConfig, text: str) -> str:
-    ident = f"{cfg.model}|{cfg.voice_id}|{cfg.sample_rate}|{cfg.speed}|{cfg.emotion}|{cfg.ellipsis_ms}|{text}"
+    ident = f"{cfg.model}|{cfg.voice_id}|{cfg.sample_rate}|{cfg.speed}|{cfg.pitch_semitones}|{cfg.emotion}|{cfg.ellipsis_ms}|{text}"
     return hashlib.sha1(ident.encode()).hexdigest()[:16]
 
 

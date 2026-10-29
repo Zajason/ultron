@@ -36,17 +36,24 @@ sample_rate = 24000                     # measured: 83 ms p50 first audio vs 103
 speed = 0.9                             # 0.6-1.5; unhurried
 emotion = ""                            # optional Cartesia emotion, e.g. "calm", "contemplative"
 ellipsis_ms = 400                       # pause for the persona's "…"
+pitch_semitones = 0.0                   # varispeed playback: lower = deeper and heavier, zero latency
 
 [audio]
 output_device = ""                      # "" = system default
-block_ms = 10
+output_rate = 48000                     # the Mac's native rate: avoids CoreAudio's resampler (+15-30 ms)
+latency_ms = 10                         # buffer hint; reported output latency ~38 ms on built-in speakers
 
 [fx]
 enabled = true
-warmth_db = 3.0                         # low-shelf boost around 220 Hz
+compress = false                        # close-mic density
+warmth_db = 3.0                         # low-shelf boost
+warmth_hz = 220.0
+rasp = 0.0                              # parallel saturation on the upper mids
 reverb_wet = 0.08                       # short, small-room plate
 metal_mix = 0.12                        # ring-mod + chorus layer, mixed under the dry voice
 metal_hz = 60.0                         # ring-mod carrier
+sub_mix = 0.0                           # octave-down machine double
+gain = 1.0
 
 [tools]
 max_auto_tier = 1                       # tiers above this need spoken/typed confirmation

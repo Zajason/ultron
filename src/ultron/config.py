@@ -44,21 +44,28 @@ class TTSConfig:
     speed: float = 0.9
     emotion: str = ""
     ellipsis_ms: int = 400
+    pitch_semitones: float = 0.0
 
 
 @dataclass(frozen=True)
 class AudioConfig:
     output_device: str = ""
-    block_ms: int = 10
+    output_rate: int = 48000
+    latency_ms: float = 10
 
 
 @dataclass(frozen=True)
 class FXConfig:
     enabled: bool = True
+    compress: bool = False
     warmth_db: float = 3.0
+    warmth_hz: float = 220.0
+    rasp: float = 0.0
     reverb_wet: float = 0.08
     metal_mix: float = 0.12
     metal_hz: float = 60.0
+    sub_mix: float = 0.0
+    gain: float = 1.0
 
 
 @dataclass(frozen=True)

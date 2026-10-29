@@ -40,6 +40,8 @@ class FakeTTS:
 
 
 class FakeOut:
+    sample_rate = 24000
+
     def __init__(self):
         self.written, self.cleared, self.busy = [], 0, False
 

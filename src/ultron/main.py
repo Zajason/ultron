@@ -33,7 +33,7 @@ from .metrics import TurnLog, TurnMetrics, percentile
 from .persona import FILLER_LINES
 from .platform import get_platform
 from .tools import AuditLog, Executor, Registry, Tier, Timers, Tool, register_builtin
-from .voices import AUDITION_TEXT, SHORTLIST
+from .voices import AUDITION_TEXT, PRESETS, SHORTLIST
 
 DIM, RESET, BOLD = "\033[2m", "\033[0m", "\033[1m"
 CACHE_DIR = Path("~/.ultron/cache").expanduser()
@@ -69,8 +69,8 @@ def _require(var: str) -> str:
 
 def _build_speaker(cfg: Config) -> Speaker:
     tts = CartesiaTTS(cfg.tts, _require("CARTESIA_API_KEY"))
-    out = AudioOutput(cfg.tts.sample_rate, cfg.audio.block_ms, cfg.audio.output_device)
-    fx = VoiceFX(cfg.fx, cfg.tts.sample_rate) if cfg.fx.enabled else None
+    out = AudioOutput(cfg.audio.output_rate, cfg.audio.latency_ms, cfg.audio.output_device)
+    fx = VoiceFX(cfg.fx, cfg.audio.output_rate) if cfg.fx.enabled else None
     return Speaker(tts, out, fx, cfg.tts)
 
 
@@ -189,24 +189,32 @@ def _write_wav(path: Path, audio: np.ndarray, sr: int) -> None:
         w.writeframes((np.clip(audio, -1, 1) * 32767).astype("<i2").tobytes())
 
 
-async def audition(cfg: Config, names: list[str], text: str, fx: bool) -> None:
+def with_preset(cfg: Config, voice_id: str, preset: str, emotion: str | None, fx: bool) -> Config:
+    p = PRESETS[preset]
+    tts = dataclasses.replace(cfg.tts, voice_id=voice_id, **p.get("tts", {}))
+    if emotion is not None:
+        tts = dataclasses.replace(tts, emotion=emotion)
+    return dataclasses.replace(cfg, tts=tts, fx=dataclasses.replace(cfg.fx, enabled=fx, **p.get("fx", {})))
+
+
+async def audition(cfg: Config, names: list[str], presets: list[str], emotions: list[str | None],
+                   text: str, fx: bool, play: bool) -> None:
     out_dir = Path("~/.ultron/audition").expanduser()
-    for name in names:
+    for name, preset, emotion in itertools.product(names, presets, emotions):
         voice_id, desc = SHORTLIST[name]
-        vcfg = dataclasses.replace(cfg, tts=dataclasses.replace(cfg.tts, voice_id=voice_id),
-                                   fx=dataclasses.replace(cfg.fx, enabled=fx))
+        vcfg = with_preset(cfg, voice_id, preset, emotion, fx)
+        label = "-".join(x for x in (name, preset, emotion or "", "" if fx else "dry") if x)
         speaker = _build_speaker(vcfg)
         await speaker.tts.connect()
-        speaker.out.start()
         try:
-            print(f"{BOLD}{name}{RESET} {DIM}{desc} · {voice_id}{RESET}", flush=True)
-            clip = await speaker.tts.synthesize(_markup(text, vcfg))
-            if speaker.fx:
-                clip = speaker.fx.process(clip)
-            _write_wav(out_dir / f"{name}{'' if fx else '-dry'}.wav", clip, vcfg.tts.sample_rate)
-            speaker.out.write(clip)
-            await asyncio.to_thread(speaker.out.wait_idle, 60)
-            await asyncio.sleep(0.6)
+            print(f"{BOLD}{label}{RESET} {DIM}{desc}{RESET}", flush=True)
+            clip = speaker.render(await speaker.tts.synthesize(_markup(text, vcfg)))
+            _write_wav(out_dir / f"{label}.wav", clip, vcfg.audio.output_rate)
+            if play:
+                speaker.out.start()
+                speaker.out.write(clip)
+                await asyncio.to_thread(speaker.out.wait_idle, 60)
+                await asyncio.sleep(0.8)
         finally:
             await speaker.tts.close()
             speaker.out.close()
@@ -284,7 +292,7 @@ async def bench_tts(cfg: Config, n: int, play: bool) -> None:
         if play:
             speaker.out.close()
     rows = [("TTS first byte", ttfb)] + ([("first sample at speaker", audio)] if play else [])
-    _table(n, rows, f"{cfg.tts.model} @ {cfg.tts.sample_rate} Hz")
+    _table(n, rows, f"{cfg.tts.model} @ {cfg.tts.sample_rate} Hz -> {cfg.audio.output_rate} Hz out")
 
 
 def _table(n: int, rows: list[tuple[str, list[float]]], note: str) -> None:
@@ -303,8 +311,11 @@ def main() -> None:
     s.add_argument("text")
     a = sub.add_parser("audition", help="play a sample line in each shortlisted voice")
     a.add_argument("voices", nargs="*", help=f"any of: {', '.join(SHORTLIST)} (default: all)")
+    a.add_argument("--preset", nargs="+", default=["current"], choices=list(PRESETS))
+    a.add_argument("--emotion", nargs="+", default=None, help='Cartesia emotions to try, e.g. calm contempt ("" = none)')
     a.add_argument("--text", default=AUDITION_TEXT)
     a.add_argument("--dry", action="store_true", help="without the FX chain")
+    a.add_argument("--no-play", action="store_true", help="only write WAV files")
     b = sub.add_parser("bench-llm", help="measure LLM latency over N fresh single-turn conversations")
     b.add_argument("--n", type=int, default=20)
     b.add_argument("--gap", type=float, default=0, help="idle seconds between turns (tests connection reuse)")
@@ -326,7 +337,9 @@ def main() -> None:
             case "audition":
                 if unknown := set(args.voices) - set(SHORTLIST):
                     sys.exit(f"unknown voice(s): {', '.join(unknown)}; choose from {', '.join(SHORTLIST)}")
-                asyncio.run(audition(cfg, args.voices or list(SHORTLIST), args.text, fx=not args.dry))
+                emotions = [e or "" for e in args.emotion] if args.emotion else [None]
+                asyncio.run(audition(cfg, args.voices or list(SHORTLIST), args.preset, emotions, args.text,
+                                     fx=not args.dry, play=not args.no_play))
             case "bench-llm":
                 _require("ANTHROPIC_API_KEY")
                 asyncio.run(bench_llm(cfg, args.n, args.gap, args.tier))

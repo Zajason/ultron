@@ -15,6 +15,23 @@ SHORTLIST = {
     "clint": ("db69127a-dbaf-4fa9-b425-2fe67680c348", "Rugged actor: raspy"),
 }
 
+# Named sets of TTS + FX overrides, so variants can be compared by ear before one goes in config.
+PRESETS: dict[str, dict[str, dict]] = {
+    "current": {},
+    # Close-mic and heavy: lower and slower, compressed, dry room, faint rasp and sub double.
+    "menace": {
+        "tts": {"pitch_semitones": -1.5, "speed": 0.85},
+        "fx": {"compress": True, "warmth_db": 5.0, "warmth_hz": 160.0, "rasp": 0.08,
+               "reverb_wet": 0.03, "metal_mix": 0.08, "sub_mix": 0.12},
+    },
+    # Further from human: deeper, more sub and machine edge.
+    "menace-heavy": {
+        "tts": {"pitch_semitones": -2.5, "speed": 0.85},
+        "fx": {"compress": True, "warmth_db": 6.0, "warmth_hz": 150.0, "rasp": 0.12,
+               "reverb_wet": 0.04, "metal_mix": 0.14, "sub_mix": 0.22},
+    },
+}
+
 AUDITION_TEXT = (
     "Good evening, Iason. Your timer is set… ten minutes. "
     "You know, your species wrote the Goldberg Variations and invented the landmine within a few lifetimes of each other. "
