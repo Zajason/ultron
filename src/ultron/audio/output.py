@@ -28,6 +28,7 @@ class AudioOutput:
         self.on_render = None  # optional callable(block): sees every block played (echo reference)
         self.played = 0  # samples handed to the device so far (speech and silence)
         self.queued_until = 0  # sample position at which everything written so far will have played
+        self.gain = 1.0  # 0 = benches run silently, with the device's real timing
         self._stream = sd.OutputStream(
             samplerate=self.sample_rate,
             channels=1,
@@ -87,6 +88,8 @@ class AudioOutput:
             if not self._q:
                 self._idle.set()
         out[filled:] = 0.0
+        if self.gain != 1.0:
+            out *= self.gain
         self.played += frames
         if self.on_render is not None:
             self.on_render(out)
