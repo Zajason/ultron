@@ -32,6 +32,8 @@ class ToolsConfig:
     notes_file: Path = Path("~/.ultron/notes.md")
     audit_log: Path = Path("~/.ultron/audit.jsonl")
     tier_overrides: dict[str, int] = field(default_factory=dict)
+    web_search: bool = True
+    web_search_max_uses: int = 2
 
 
 @dataclass(frozen=True)
@@ -103,6 +105,7 @@ class FXConfig:
 @dataclass(frozen=True)
 class Config:
     user_name: str = "Iason"
+    location: str = "Athens"
     menace_level: int = 2
     llm: LLMConfig = field(default_factory=LLMConfig)
     tools: ToolsConfig = field(default_factory=ToolsConfig)
@@ -150,6 +153,7 @@ def load_config(root: Path | None = None) -> Config:
         raise ValueError(f"persona.menace_level must be 0..3, got {menace}")
     return Config(
         user_name=raw.get("user", {}).get("name", "Iason"),
+        location=raw.get("user", {}).get("location", "Athens"),
         menace_level=menace,
         llm=llm,
         tools=tools,

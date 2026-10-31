@@ -5,6 +5,7 @@
 
 [user]
 name = "Iason"
+location = "Athens"                     # home city for weather (a guess: the API edge serving you is in Athens)
 
 [persona]
 # 0 = plain assistant in his voice, 1 = light dry wit, 2 = default, 3 = full theatrical villain
@@ -82,6 +83,8 @@ sub_mix = 0.12                          # octave-down machine double
 gain = 1.0
 
 [tools]
+web_search = true                       # Anthropic-hosted web search (billed per search)
+web_search_max_uses = 2
 max_auto_tier = 1                       # tiers above this need spoken/typed confirmation
 tier3_enabled = false
 timeout_s = 10

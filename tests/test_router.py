@@ -19,6 +19,13 @@ FAST = [
     "Good morning",
     "never mind",
     "How much memory is free?",
+    "What's the weather tomorrow?",
+    "Is it going to rain tomorrow?",
+    "What's on my calendar today?",
+    "Do I have any meetings tomorrow?",
+    "Find the build prompt file in my projects.",
+    "Who won the most recent Formula 1 race?",
+    "What's playing?",
 ]
 STRONG = [
     "What do you think of humans?",
@@ -31,6 +38,7 @@ STRONG = [
     "Is it worth starting over at thirty?",
     "Tell me about Bach.",
     "What do you think about memory, and why humans romanticise it?",
+    "Why do people find rain so melancholic?",
     "Good morning. I couldn't sleep, I kept thinking about whether any of this matters.",
 ]
 

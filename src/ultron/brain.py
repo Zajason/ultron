@@ -47,6 +47,10 @@ class Brain:
         self.client = client or make_client(cfg.llm)
         self.executor = executor
         self.tools = registry.schemas()
+        if cfg.tools.web_search:
+            # Anthropic-hosted search. The basic variant: the dynamic-filtering one errors on Haiku 5.5
+            # and took 13.8 s vs 4.5 s on Sonnet 5.5 (measured).
+            self.tools.append({"type": "web_search_20250305", "name": "web_search", "max_uses": cfg.tools.web_search_max_uses})
         self.messages: list[dict[str, Any]] = []
         self.plain = False
         self.menace = cfg.menace_level
@@ -233,6 +237,8 @@ class Brain:
             self.messages.append({"role": "assistant", "content": final.content})
             spoke = spoke or any(b.type == "text" and b.text for b in final.content)
 
+            if final.stop_reason == "pause_turn":
+                continue  # a server tool (web search) paused mid-turn: send the turn back to resume
             tool_uses = [b for b in final.content if b.type == "tool_use"]
             if not tool_uses:
                 break
@@ -259,15 +265,29 @@ class Brain:
         m.mark("llm_request")
         ttft = None
         extra = {"tool_choice": {"type": "none"}} if no_tools else {}
+        saw_block = False
+        last_char = [" "]
+        gap = [False]
+
+        def emit_gap() -> None:
+            gap[0] = True  # decided on the next text: it may already start with a space
         async with self.client.messages.stream(
             **self._params(model), **extra, messages=self.messages, cache_control={"type": "ephemeral"}
         ) as stream:
             async for event in stream:
+                if event.type == "content_block_start" and event.content_block.type == "text" and saw_block:
+                    emit_gap()  # text resumes after a tool/search block: keep words apart
+                if event.type == "content_block_start":
+                    saw_block = True
                 if event.type == "text" and event.text:
                     if ttft is None:
                         ttft = (time.perf_counter() - t_req) * 1000
+                    if gap[0] and not last_char[0].isspace() and not event.text[0].isspace():
+                        emit(" ")
+                    gap[0] = False
                     emit(event.text)
-                elif event.type == "content_block_start" and event.content_block.type == "tool_use":
+                    last_char[0] = event.text[-1]
+                elif event.type == "content_block_start" and event.content_block.type in ("tool_use", "server_tool_use"):
                     tool_block()
             final = await stream.get_final_message()
         u = final.usage

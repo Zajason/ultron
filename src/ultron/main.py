@@ -48,6 +48,7 @@ from .metrics import TurnLog, TurnMetrics, percentile
 from .persona import FILLER_LINES
 from .platform import get_platform
 from .tools import AuditLog, Executor, Registry, Tier, Timers, Tool, register_builtin
+from .tools.practical import register_practical
 from .voices import AUDITION_TEXT, PRESETS, SHORTLIST
 
 DIM, RESET, BOLD, RED = "\033[2m", "\033[0m", "\033[1m", "\033[31m"
@@ -79,6 +80,7 @@ def _build(cfg: Config, announce: Announce | None = None, dry_run: bool = False)
 
     registry = Registry()
     register_builtin(registry, plat, Timers(on_timer), cfg.tools.notes_file)
+    register_practical(registry, cfg.location)
     audit = AuditLog(cfg.tools.audit_log)
     executor = Executor(registry, cfg.tools, audit, confirm, dry_run=dry_run)
     return Brain(cfg, registry, executor), audit

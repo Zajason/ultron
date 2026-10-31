@@ -53,6 +53,7 @@ def normalize(text: str) -> str:
         text = rx.sub(rep, text)
     text = _UNIT_RE.sub(lambda m: f"{m.group(1)} {_UNITS[m.group(2)]}", text)
     text = text.replace("&", " and ").replace("!", ".")
+    text = re.sub(r"\s+([.,?;:])", r"\1", text)  # citation fragments leave "rivals ." behind
     return re.sub(r"\s{2,}", " ", text).strip()
 
 

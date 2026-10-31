@@ -18,6 +18,7 @@ from ultron.text.normalize import normalize, pause_markup
         ("Fast, e.g. Haiku.", "Fast, for example Haiku."),
         ("Tea & biscuits", "Tea and biscuits"),
         ("Done!", "Done."),
+        ("his two closest rivals .", "his two closest rivals."),
         # Untouched: plain numbers, times, version-like strings, words that look like units.
         ("It's 18:40 on the 29th.", "It's 18:40 on the 29th."),
         ("Python 3.13 is installed", "Python 3.13 is installed"),

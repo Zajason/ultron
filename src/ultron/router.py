@@ -19,7 +19,12 @@ _PRACTICAL = re.compile(
     | \b(battery|cpu|disk\s+space)\b | \bsystem\s+stats\b
     | \b(memory|ram|storage)\s+(usage|use|left|free)\b | \bhow\s+much\s+(memory|ram|storage|space)\b
     | \b(make|take|save|add)\s+a\s+note\b | \bnote\s+(this|that)\b
-    | \b(play|pause|resume|skip|next\s+track|previous\s+track)\b
+    | \b(play|pause|resume|skip|next\s+track|previous\s+track|what'?s\s+playing)\b
+    | \b(weather|forecast|temperature|raining|rain\s+(today|tomorrow)|umbrella)\b
+    | \b(calendar|meetings?|agenda|appointments?|schedule\s+(today|tomorrow))\b
+    | \b(find|search\s+for|look\s+for|where\s+is|open)\b.*\b(file|folder|document|pdf|notes?)\b
+    | \b(read|show\s+me)\s+(the\s+|my\s+)?(file|notes?)\b
+    | \bwho\s+won\b | \b(score|result)\s+of\b
     """,
     re.I | re.X,
 )

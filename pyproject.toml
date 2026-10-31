@@ -8,6 +8,7 @@ dependencies = [
     "anthropic==2.3.0",
     "cartesia[websockets]==4.2.0",
     "deepgram-sdk==7.16.0",
+    "httpx==0.28.1",
     "livekit==1.2.0",
     "numpy==2.5.4",
     "onnxruntime==1.31.1",

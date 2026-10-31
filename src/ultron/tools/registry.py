@@ -55,6 +55,8 @@ def validate_args(tool: Tool, args: Any) -> str | None:
         py = _JSON_TYPES.get(spec.get("type", ""))
         if py and (not isinstance(v, py) or (py is int and isinstance(v, bool))):
             return f"argument '{k}' must be {spec['type']}"
+        if "enum" in spec and v not in spec["enum"]:
+            return f"argument '{k}' must be one of {spec['enum']}"
         if "minimum" in spec and v < spec["minimum"] or "maximum" in spec and v > spec["maximum"]:
             return f"argument '{k}' out of range"
     return None
