@@ -144,3 +144,48 @@ async def test_barge_in_keeps_only_what_was_heard(tmp_path):
     assert brain.messages[-1]["role"] == "assistant"
     assert brain.messages[-1]["content"][0]["text"] == "Ten minutes, —"
     assert out.cleared >= 1
+
+
+async def _confirm_with(convo, answer, tier=2):
+    from ultron.tools import Tier, Tool
+
+    async def noop():
+        return ""
+
+    tool = Tool("run_shell", "", {}, (), Tier(tier), noop, describe=lambda a: "run the command 'ls'")
+    task = asyncio.create_task(convo.confirm(tool, {}, Tier(tier)))
+    await settle()
+    if answer is not None:
+        convo._on_turn(TurnEvent("end", answer, 0.0, "model"))
+    return await task
+
+
+async def test_spoken_confirmation_yes_and_no(tmp_path):
+    convo, *_ = make(tmp_path, [])
+    assert await _confirm_with(convo, "Yes, go ahead.") is True
+    assert await _confirm_with(convo, "No, don't.") is False
+    assert convo.reply is None  # the answers did not start replies
+
+
+async def test_confirmation_timeout_declines(tmp_path):
+    convo, *_ = make(tmp_path, [])
+    convo.confirm_timeout_s = 0.05
+    assert await _confirm_with(convo, None) is False
+
+
+async def test_destructive_needs_the_passphrase(tmp_path):
+    convo, *_ = make(tmp_path, [])
+    assert await _confirm_with(convo, "yes", tier=3) is False  # no passphrase configured
+    convo.passphrase = "Phase Two"
+    assert await _confirm_with(convo, "yes", tier=3) is False
+    assert await _confirm_with(convo, "Phase two.", tier=3) is True
+
+
+async def test_answering_does_not_barge_in(tmp_path):
+    convo, brain, client, speaker, out, done = make(tmp_path, [])
+    convo._confirm = asyncio.get_running_loop().create_future()
+    convo.reply = object()  # a reply is in flight, waiting for the answer
+    convo._on_vad(VADEvent("start", 0.0, 0.9))
+    assert convo.reply is not None and out.cleared >= 1
+    convo._confirm = None
+    convo.reply = None

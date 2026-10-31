@@ -24,6 +24,10 @@ class Tool:
     required: tuple[str, ...]
     tier: Tier
     handler: Handler
+    describe: Callable[[dict[str, Any]], str] | None = None  # plain words for confirmations
+
+    def describe_call(self, args: dict[str, Any]) -> str:
+        return self.describe(args) if self.describe else f"use {self.name} with {args}"
 
     def schema(self) -> dict[str, Any]:
         return {

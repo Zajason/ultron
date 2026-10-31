@@ -34,6 +34,10 @@ class ToolsConfig:
     tier_overrides: dict[str, int] = field(default_factory=dict)
     web_search: bool = True
     web_search_max_uses: int = 2
+    passphrase: str = ""  # tier 3 needs it spoken; empty = tier 3 can never be confirmed
+    confirm_timeout_s: float = 20.0
+    shell_timeout_s: float = 20.0
+    shell_allow: tuple[str, ...] = ()  # if set, only these programs may start a shell command
 
 
 @dataclass(frozen=True)
@@ -145,7 +149,7 @@ def load_config(root: Path | None = None) -> Config:
     llm = LLMConfig(**raw.get("llm", {}))
     if llm.routing not in ("hybrid", "fast", "strong"):
         raise ValueError(f"llm.routing must be hybrid, fast or strong, got {llm.routing!r}")
-    tools = ToolsConfig(**raw.get("tools", {}))
+    tools = ToolsConfig(**{k: tuple(v) if isinstance(v, list) else v for k, v in raw.get("tools", {}).items()})
     tools = ToolsConfig(**{**tools.__dict__, "notes_file": _path(tools.notes_file), "audit_log": _path(tools.audit_log)})
 
     menace = int(raw.get("persona", {}).get("menace_level", 2))

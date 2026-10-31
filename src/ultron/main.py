@@ -49,6 +49,7 @@ from .persona import FILLER_LINES
 from .platform import get_platform
 from .tools import AuditLog, Executor, Registry, Tier, Timers, Tool, register_builtin
 from .tools.practical import register_practical
+from .tools.risky import register_risky
 from .voices import AUDITION_TEXT, PRESETS, SHORTLIST
 
 DIM, RESET, BOLD, RED = "\033[2m", "\033[0m", "\033[1m", "\033[31m"
@@ -75,12 +76,20 @@ def _build(cfg: Config, announce: Announce | None = None, dry_run: bool = False)
             await announce("Your timer is done." if label == "timer" else f"Your {label} timer is done.")
 
     async def confirm(tool: Tool, args: dict, tier: Tier) -> bool:
-        ans = await asyncio.to_thread(input, f"\n{BOLD}[tier {int(tier)}] {tool.name}({args}) — proceed? [y/N] {RESET}")
+        what = tool.describe_call(args)
+        if tier >= Tier.DESTRUCTIVE:
+            if not cfg.tools.passphrase:
+                print(f"\n{DIM}[tier 3] {what}: no passphrase configured, declined{RESET}")
+                return False
+            ans = await asyncio.to_thread(input, f"\n{BOLD}[tier 3] {what}. Type the passphrase: {RESET}")
+            return ans.strip().lower() == cfg.tools.passphrase.strip().lower()
+        ans = await asyncio.to_thread(input, f"\n{BOLD}[tier {int(tier)}] {what}. Proceed? [y/N] {RESET}")
         return ans.strip().lower() in ("y", "yes")
 
     registry = Registry()
     register_builtin(registry, plat, Timers(on_timer), cfg.tools.notes_file)
     register_practical(registry, cfg.location)
+    register_risky(registry, cfg.tools.shell_timeout_s, list(cfg.tools.shell_allow))
     audit = AuditLog(cfg.tools.audit_log)
     executor = Executor(registry, cfg.tools, audit, confirm, dry_run=dry_run)
     return Brain(cfg, registry, executor), audit
@@ -292,7 +301,9 @@ async def live(cfg: Config, wake: bool = False, daemon: bool = False) -> None:
         ui.wake = wake_with_chime
     convo = Conversation(brain, speaker, mic, DeepgramFlux(cfg.stt, _require("DEEPGRAM_API_KEY")),
                          _vad(cfg, mic), aec, eager, cfg.stt.frame_ms, TurnLog(cfg.turns_log), ui,
-                         wake=detector, idle_sleep_s=cfg.wake.idle_sleep_s)
+                         wake=detector, idle_sleep_s=cfg.wake.idle_sleep_s,
+                         passphrase=cfg.tools.passphrase, confirm_timeout_s=cfg.tools.confirm_timeout_s)
+    brain.executor.confirm = convo.confirm  # risky tools are confirmed out loud
 
     async def quit_on_q():
         while (await asyncio.to_thread(input)).strip().lower() not in ("q", "quit", "/quit"):

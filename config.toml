@@ -83,6 +83,12 @@ sub_mix = 0.12                          # octave-down machine double
 gain = 1.0
 
 [tools]
+# Tiers: 0 read and 1 low-risk run on their own; 2 (shell, write/move files) asks out loud first;
+# 3 (delete -> Trash) needs the passphrase below and is off until tier3_enabled = true.
+passphrase = ""                         # tier 3: say this to confirm; empty = never
+confirm_timeout_s = 20
+shell_timeout_s = 20
+shell_allow = []                        # e.g. ["ls", "git", "du"]; empty = any program (blocked patterns still apply)
 web_search = true                       # Anthropic-hosted web search (billed per search)
 web_search_max_uses = 2
 max_auto_tier = 1                       # tiers above this need spoken/typed confirmation

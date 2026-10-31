@@ -31,6 +31,8 @@ from .brain import Brain
 from .metrics import TurnLog, TurnMetrics
 from .wakeword import WakeWordDetector
 
+_YES_RE = re.compile(r"^\W*(yes|yeah|yep|yup|sure|ok(ay)?|do it|go ahead|proceed|confirm(ed)?|affirmative|please do)\b", re.I)
+
 _WAKE_RE = re.compile(r"\b(ultron|ul ?tron|ultra ?tron|altron)\b", re.I)
 
 
@@ -68,7 +70,8 @@ class Conversation:
     def __init__(self, brain: Brain, speaker: Speaker, mic: MicInput, stt: DeepgramFlux,
                  vad: SileroVAD, aec: EchoCanceller | None, eager: bool, frame_ms: int = 80,
                  turn_log: TurnLog | None = None, ui: UI | None = None,
-                 wake: WakeWordDetector | None = None, idle_sleep_s: float = 10.0) -> None:
+                 wake: WakeWordDetector | None = None, idle_sleep_s: float = 10.0,
+                 passphrase: str = "", confirm_timeout_s: float = 20.0) -> None:
         self.brain, self.speaker, self.mic, self.stt = brain, speaker, mic, stt
         self.vad, self.aec, self.eager = vad, aec, eager
         self.frame_samples = mic.out_rate * frame_ms // 1000
@@ -91,6 +94,10 @@ class Conversation:
         self._ring = np.zeros(0, np.float32)
         self._stream_ready = asyncio.Event()
         self.false_wakes = 0
+        # Spoken confirmation for risky tools: the next finished turn is the answer, not a request.
+        self.passphrase = passphrase
+        self.confirm_timeout_s = confirm_timeout_s
+        self._confirm: asyncio.Future | None = None
 
     # -- lifecycle ------------------------------------------------------------------------------
 
@@ -176,6 +183,9 @@ class Conversation:
     def _on_vad(self, ev: VADEvent) -> None:
         if ev.kind == "stop":
             return
+        if self._confirm is not None:
+            self.speaker.out.clear()  # answering the question: stop asking it, but keep the turn
+            return
         r = self.reply
         if r is None:
             return
@@ -208,6 +218,11 @@ class Conversation:
             self._on_turn(ev)
 
     def _on_turn(self, ev: TurnEvent) -> None:
+        if self._confirm is not None:
+            if ev.kind == "end" and not self._confirm.done():
+                self.ui.heard(ev.transcript)
+                self._confirm.set_result(ev.transcript)
+            return
         if self._verify and ev.kind in ("eager", "end") and ev.transcript:
             if not _WAKE_RE.search(ev.transcript):
                 if ev.kind == "end":  # the detector misfired: no reply, straight back to sleep
@@ -236,6 +251,32 @@ class Conversation:
             self.ui.heard(ev.transcript)
             self._start_reply(ev.transcript, speculative=False)
             self.reply.events["end"] = ev.t
+
+    async def confirm(self, tool, args: dict, tier) -> bool:
+        """Executor callback: ask out loud, take the user's next turn as the answer."""
+        what = tool.describe_call(args)
+        destructive = int(tier) >= 3
+        if destructive and not self.passphrase:
+            self.ui.note(f"[tier 3] {what}: no passphrase configured, declined")
+            return False
+        question = (f"This one can't be undone easily: {what}. Say the passphrase to go ahead." if destructive
+                    else f"Before I do that: I'm about to {what}. Shall I go ahead?")
+        self.ui.note(f"[confirm, tier {int(tier)}] {what}")
+        self.speaker.say(question)
+        self._confirm = asyncio.get_running_loop().create_future()
+        try:
+            answer = await asyncio.wait_for(self._confirm, self.confirm_timeout_s)
+        except TimeoutError:
+            answer = ""
+        finally:
+            self._confirm = None
+        if destructive:
+            ok = _norm(self.passphrase) in _norm(answer)
+        else:
+            ok = bool(_YES_RE.match(answer))
+        self.ui.note("confirmed" if ok else "declined")
+        self._last_activity = time.perf_counter()
+        return ok
 
     def _turn_t0(self) -> float:
         # Voice-to-voice is timed from the end of the user's last voiced audio (VAD), not from when
