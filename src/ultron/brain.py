@@ -18,6 +18,7 @@ from anthropic import AsyncAnthropic, DefaultAsyncHttpxClient
 from .config import Config, LLMConfig
 from .metrics import TurnMetrics
 from .persona import PLAIN_OFF, PLAIN_ON, build_system_prompt, detect_mode_switch
+from .pricing import usd
 from .router import route
 from .text import Chunker
 from .tools import Executor, Registry
@@ -300,6 +301,7 @@ class Brain:
                 "cache_read": u.cache_read_input_tokens or 0,
                 "cache_write": u.cache_creation_input_tokens or 0,
                 "output": u.output_tokens,
+                "usd": round(usd(model, u), 6),
                 "stop": final.stop_reason,
             }
         )

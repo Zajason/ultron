@@ -42,6 +42,8 @@ class TurnMetrics:
         cr = sum(c.get("cache_read", 0) for c in self.llm_calls)
         ci = sum(c.get("input", 0) for c in self.llm_calls)
         parts.append(f"cache {cr}/{cr + ci} tok")
+        cost = sum(c.get("usd", 0) for c in self.llm_calls)
+        parts.append(f"${cost:.4f}")
         return " · ".join(parts)
 
     def to_json(self) -> str:
