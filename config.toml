@@ -103,5 +103,18 @@ audit_log = "~/.ultron/audit.jsonl"
 [tools.tier_overrides]
 # open_app = 2
 
+# MCP servers: their tools become Ultron's, behind the same tiers and audit log. Tier per tool:
+# `tiers` entry, else the server's hints (read-only -> 0, destructive -> 3), else `tier` (default 2: ask).
+# [[mcp.servers]]
+# name = "files"
+# command = "npx"
+# args = ["-y", "@modelcontextprotocol/server-filesystem", "~/Documents"]
+# tier = 2
+# tiers = { read_text_file = 0, list_directory = 0 }
+#
+# [[mcp.servers]]
+# name = "remote"
+# url = "https://example.com/mcp"
+
 [metrics]
 turns_log = "~/.ultron/turns.jsonl"

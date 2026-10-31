@@ -122,6 +122,7 @@ class Config:
     audio: AudioConfig = field(default_factory=AudioConfig)
     fx: FXConfig = field(default_factory=FXConfig)
     turns_log: Path = Path("~/.ultron/turns.jsonl")
+    mcp_servers: tuple[dict, ...] = ()
 
 
 def platform_name() -> str:
@@ -171,4 +172,5 @@ def load_config(root: Path | None = None) -> Config:
         wake=WakeConfig(**raw.get("wake", {})),
         fx=FXConfig(**raw.get("fx", {})),
         turns_log=_path(raw.get("metrics", {}).get("turns_log", "~/.ultron/turns.jsonl")),
+        mcp_servers=tuple(raw.get("mcp", {}).get("servers", [])),
     )

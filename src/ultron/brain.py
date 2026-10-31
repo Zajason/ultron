@@ -58,7 +58,20 @@ class Brain:
         self.llm = cfg.llm
         self.client = client or make_client(cfg.llm)
         self.executor = executor
-        self.tools = registry.schemas()
+        self.registry = registry
+        self.refresh_tools()
+        self.messages: list[dict[str, Any]] = []
+        self.memory = memory
+        self.summary = ""  # of turns trimmed from the rolling window, written in the background
+        self._summarising: asyncio.Task | None = None
+        self.plain = False
+        self.menace = cfg.menace_level
+        self._system = self._build_system()
+
+    def refresh_tools(self) -> None:
+        """Rebuild the tool list (after MCP servers registered theirs). Changes the cached prefix."""
+        cfg = self.cfg
+        self.tools = self.registry.schemas()
         if cfg.tools.web_search:
             # Anthropic-hosted search. The basic variant: the dynamic-filtering one errors on Haiku 5.5
             # and took 13.8 s vs 4.5 s on Sonnet 5.5 (measured).
@@ -67,13 +80,6 @@ class Brain:
             # In both models' lists (same tool set, and history may contain the call): Haiku uses it,
             # Sonnet is told it's already there.
             self.tools.append(ESCALATE)
-        self.messages: list[dict[str, Any]] = []
-        self.memory = memory
-        self.summary = ""  # of turns trimmed from the rolling window, written in the background
-        self._summarising: asyncio.Task | None = None
-        self.plain = False
-        self.menace = cfg.menace_level
-        self._system = self._build_system()
 
     # -- prompt -------------------------------------------------------------------------------
 

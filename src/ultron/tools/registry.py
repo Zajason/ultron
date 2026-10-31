@@ -25,11 +25,14 @@ class Tool:
     tier: Tier
     handler: Handler
     describe: Callable[[dict[str, Any]], str] | None = None  # plain words for confirmations
+    input_schema: dict[str, Any] | None = None  # full JSON schema from elsewhere (MCP); checked loosely
 
     def describe_call(self, args: dict[str, Any]) -> str:
         return self.describe(args) if self.describe else f"use {self.name} with {args}"
 
     def schema(self) -> dict[str, Any]:
+        if self.input_schema is not None:
+            return {"name": self.name, "description": self.description, "input_schema": self.input_schema}
         return {
             "name": self.name,
             "description": self.description,
@@ -52,6 +55,8 @@ def validate_args(tool: Tool, args: Any) -> str | None:
     for k in tool.required:
         if k not in args:
             return f"missing required argument '{k}'"
+    if tool.input_schema is not None:
+        return None  # foreign schema (MCP): the server validates its own arguments
     for k, v in args.items():
         spec = tool.params.get(k)
         if spec is None:

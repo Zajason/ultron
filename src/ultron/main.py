@@ -51,6 +51,7 @@ from .platform import get_platform
 from .tools import AuditLog, Executor, Registry, Tier, Timers, Tool, register_builtin
 from .tools.practical import register_practical
 from .tools.handoff import register_handoff
+from .tools.mcp_client import MCPHub
 from .tools.risky import register_risky
 from .voices import AUDITION_TEXT, PRESETS, SHORTLIST
 
@@ -148,6 +149,17 @@ def _merge_audio_marks(m: TurnMetrics, speaker: Speaker, first_audio: float | No
 HELP = "/menace 0-3 · /reset · /quit"
 
 
+async def _start_mcp(cfg: Config, brain: Brain) -> tuple[MCPHub | None, list[str]]:
+    """Start the configured MCP servers and add their tools (before the first turn: the tool list is
+    part of the cached prefix)."""
+    if not cfg.mcp_servers:
+        return None, []
+    hub = MCPHub(list(cfg.mcp_servers))
+    lines = await hub.connect(brain.registry)
+    brain.refresh_tools()
+    return hub, lines
+
+
 async def _reply(brain: Brain, speaker: Speaker | None, text: str, t0: float | None = None) -> TurnMetrics:
     """One assistant turn: stream the reply to the terminal and, if voiced, to the speaker."""
     print(f"{BOLD}ultron ›{RESET} ", end="", flush=True)
@@ -172,7 +184,8 @@ async def text_mode(cfg: Config, mute: bool) -> None:
     brain, audit = _build(cfg, announce)
     turn_log = TurnLog(cfg.turns_log)
     print(f"{DIM}warming up…{RESET}", end=" ", flush=True)
-    ready = [f"llm {await brain.warm():.0f}ms"]
+    hub, mcp_lines = await _start_mcp(cfg, brain)
+    ready = [f"llm {await brain.warm():.0f}ms", *mcp_lines]
     if speaker:
         ready.append(await _start_speaker(speaker, cfg))
     print(f"{DIM}{' · '.join(ready)} · routing {cfg.llm.routing} · menace {brain.menace} · {HELP}{RESET}")
@@ -215,6 +228,8 @@ async def text_mode(cfg: Config, mute: bool) -> None:
             speaker.interrupt()
             await speaker.tts.close()
             speaker.out.close()
+        if hub is not None:
+            await hub.close()
         await brain.close()
         audit.close()
 
@@ -279,7 +294,8 @@ async def live(cfg: Config, wake: bool = False, daemon: bool = False) -> None:
 
     brain, audit = _build(cfg, announce)
     print(f"{DIM}warming up…{RESET}", end=" ", flush=True)
-    ready = [f"llm {await brain.warm():.0f}ms", await _start_speaker(speaker, cfg),
+    hub, mcp_lines = await _start_mcp(cfg, brain)
+    ready = [f"llm {await brain.warm():.0f}ms", *mcp_lines, await _start_speaker(speaker, cfg),
              f"mic {mic.name}", f"out {speaker.out.sample_rate} Hz"]
     aec = _aec_for(cfg, speaker, mic)
     ready.append("echo cancel on" if aec else "echo cancel off (headphones)")
@@ -335,6 +351,8 @@ async def live(cfg: Config, wake: bool = False, daemon: bool = False) -> None:
         await speaker.tts.close()
         speaker.out.close()
         mic.close()
+        if hub is not None:
+            await hub.close()
         await brain.close()
         audit.close()
 
@@ -421,7 +439,8 @@ async def talk(cfg: Config) -> None:
     turn_log = TurnLog(cfg.turns_log)
     ptt = PushToTalk(DeepgramFlux(cfg.stt, _require("DEEPGRAM_API_KEY")), mic)
     print(f"{DIM}warming up…{RESET}", end=" ", flush=True)
-    ready = [f"llm {await brain.warm():.0f}ms", await _start_speaker(speaker, cfg),
+    hub, mcp_lines = await _start_mcp(cfg, brain)
+    ready = [f"llm {await brain.warm():.0f}ms", *mcp_lines, await _start_speaker(speaker, cfg),
              f"mic {mic.name} {mic.capture_rate} Hz, {mic.device_latency_ms:.0f}ms",
              f"out {speaker.out.sample_rate} Hz"]
     print(f"{DIM}{' · '.join(ready)}{RESET}")
@@ -466,6 +485,8 @@ async def talk(cfg: Config) -> None:
         await speaker.tts.close()
         speaker.out.close()
         mic.close()
+        if hub is not None:
+            await hub.close()
         await brain.close()
         audit.close()
 
