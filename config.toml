@@ -97,6 +97,7 @@ tier3_enabled = false
 timeout_s = 10
 max_output_chars = 2000
 notes_file = "~/.ultron/notes.md"
+memory_file = "~/.ultron/memory.md"     # durable facts (remember/forget tools); plain markdown, edit freely
 audit_log = "~/.ultron/audit.jsonl"
 
 [tools.tier_overrides]

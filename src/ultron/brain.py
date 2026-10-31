@@ -16,6 +16,7 @@ import httpx2
 from anthropic import AsyncAnthropic, DefaultAsyncHttpxClient
 
 from .config import Config, LLMConfig
+from .memory import Memory
 from .metrics import TurnMetrics
 from .persona import PLAIN_OFF, PLAIN_ON, build_system_prompt, detect_mode_switch
 from .pricing import usd
@@ -51,6 +52,7 @@ class Brain:
         registry: Registry,
         executor: Executor,
         client: AsyncAnthropic | None = None,
+        memory: Memory | None = None,
     ) -> None:
         self.cfg = cfg
         self.llm = cfg.llm
@@ -66,6 +68,9 @@ class Brain:
             # Sonnet is told it's already there.
             self.tools.append(ESCALATE)
         self.messages: list[dict[str, Any]] = []
+        self.memory = memory
+        self.summary = ""  # of turns trimmed from the rolling window, written in the background
+        self._summarising: asyncio.Task | None = None
         self.plain = False
         self.menace = cfg.menace_level
         self._system = self._build_system()
@@ -73,7 +78,9 @@ class Brain:
     # -- prompt -------------------------------------------------------------------------------
 
     def _build_system(self) -> list[dict[str, Any]]:
-        # One explicit breakpoint at the end of system caches tools + system (tools render first).
+        # One explicit breakpoint at the end of the persona caches tools + persona (tools render
+        # first). Memory and the running summary come after it: when they change, only the
+        # conversation's cache is rewritten, never the persona's.
         return [
             {
                 "type": "text",
@@ -81,6 +88,14 @@ class Brain:
                 "cache_control": {"type": "ephemeral", "ttl": self.llm.cache_ttl},
             }
         ]
+
+    def _system_blocks(self) -> list[dict[str, Any]]:
+        extra = []
+        if self.memory is not None and self.memory.facts:
+            extra.append(f"What you remember about {self.cfg.user_name} from earlier conversations:\n{self.memory.render()}")
+        if self.summary:
+            extra.append(f"Earlier in this conversation (summary of turns no longer shown):\n{self.summary}")
+        return self._system + ([{"type": "text", "text": "\n\n".join(extra)}] if extra else [])
 
     def set_menace(self, level: int) -> None:
         self.menace = level
@@ -96,7 +111,7 @@ class Brain:
         return {
             "model": model,
             "max_tokens": self.llm.max_tokens,
-            "system": self._system,
+            "system": self._system_blocks(),
             "tools": self.tools,
             "thinking": thinking,
             "output_config": {"effort": self.llm.effort},
@@ -133,6 +148,7 @@ class Brain:
     def reset(self) -> None:
         self.messages.clear()
         self.plain = False
+        self.summary = ""
 
     def _add_user(self, text: str) -> None:
         # The clock rides on the user message, after the cached prefix: the model knows the time
@@ -190,9 +206,39 @@ class Brain:
         if len(starts) <= self.llm.max_turns:
             return
         keep = self.llm.max_turns - max(1, self.llm.max_turns // 3)
-        self.messages = self.messages[starts[-keep]:]
+        dropped, self.messages = self.messages[: starts[-keep]], self.messages[starts[-keep]:]
+        self._summarising = asyncio.create_task(self._summarise(dropped, self._summarising))
         if self.plain and not any(m["role"] == "system" for m in self.messages):
             self.messages.insert(1, {"role": "system", "content": PLAIN_ON})
+
+    async def _summarise(self, dropped: list[dict[str, Any]], previous: asyncio.Task | None) -> None:
+        """Fold trimmed turns into the running summary, off the critical path (Haiku, ~1 s)."""
+        if previous is not None:
+            await asyncio.gather(previous, return_exceptions=True)
+        lines = []
+        for msg in dropped:
+            if msg["role"] == "user" and isinstance(msg["content"], str):
+                lines.append(f"{self.cfg.user_name}: {msg['content'].split('] ', 1)[-1]}")
+            elif msg["role"] == "assistant":
+                for blk in msg["content"] if isinstance(msg["content"], list) else []:
+                    kind = _block_type(blk)
+                    if kind == "text":
+                        lines.append(f"Ultron: {blk['text'] if isinstance(blk, dict) else blk.text}")
+                    elif kind == "tool_use":
+                        lines.append(f"(Ultron used {blk['name'] if isinstance(blk, dict) else blk.name})")
+        if not lines:
+            return
+        prompt = (f"Previous summary:\n{self.summary or '(none)'}\n\nNew exchanges:\n" + "\n".join(lines) +
+                  "\n\nUpdate the summary: facts, requests, decisions and open threads, in at most 120 words. "
+                  "Plain sentences, no preamble.")
+        try:
+            r = await self.client.messages.create(model=self.llm.fast_model, max_tokens=400, thinking={"type": "disabled"},
+                                                  messages=[{"role": "user", "content": prompt}])
+            text = "".join(b.text for b in r.content if b.type == "text").strip()
+            if text:
+                self.summary = text
+        except Exception:
+            pass  # a missed summary only costs context, never the conversation
 
     async def respond(
         self,

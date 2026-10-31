@@ -44,6 +44,7 @@ from .conversation import UI, Conversation
 from .wakeword import MODELS as WAKE_MODELS
 from .wakeword import WakeWordDetector
 from .listen import PushToTalk
+from .memory import Memory, register_memory
 from .metrics import TurnLog, TurnMetrics, percentile
 from .persona import FILLER_LINES
 from .platform import get_platform
@@ -92,9 +93,11 @@ def _build(cfg: Config, announce: Announce | None = None, dry_run: bool = False)
     register_practical(registry, cfg.location)
     register_risky(registry, cfg.tools.shell_timeout_s, list(cfg.tools.shell_allow))
     register_handoff(registry, cfg.tools.handoff_app)
+    memory = Memory(cfg.tools.memory_file)
+    register_memory(registry, memory)
     audit = AuditLog(cfg.tools.audit_log)
     executor = Executor(registry, cfg.tools, audit, confirm, dry_run=dry_run)
-    return Brain(cfg, registry, executor), audit
+    return Brain(cfg, registry, executor, memory=memory), audit
 
 
 def _require(var: str) -> str:

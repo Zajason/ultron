@@ -30,6 +30,7 @@ class ToolsConfig:
     timeout_s: float = 10
     max_output_chars: int = 2000
     notes_file: Path = Path("~/.ultron/notes.md")
+    memory_file: Path = Path("~/.ultron/memory.md")
     audit_log: Path = Path("~/.ultron/audit.jsonl")
     tier_overrides: dict[str, int] = field(default_factory=dict)
     web_search: bool = True
@@ -151,7 +152,8 @@ def load_config(root: Path | None = None) -> Config:
     if llm.routing not in ("hybrid", "fast", "strong"):
         raise ValueError(f"llm.routing must be hybrid, fast or strong, got {llm.routing!r}")
     tools = ToolsConfig(**{k: tuple(v) if isinstance(v, list) else v for k, v in raw.get("tools", {}).items()})
-    tools = ToolsConfig(**{**tools.__dict__, "notes_file": _path(tools.notes_file), "audit_log": _path(tools.audit_log)})
+    tools = ToolsConfig(**{**tools.__dict__, "notes_file": _path(tools.notes_file), "audit_log": _path(tools.audit_log),
+                                         "memory_file": _path(tools.memory_file)})
 
     menace = int(raw.get("persona", {}).get("menace_level", 2))
     if not 0 <= menace <= 3:
