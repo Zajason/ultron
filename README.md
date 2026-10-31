@@ -19,7 +19,7 @@ The full specification is in [ULTRON_BUILD_PROMPT.md](ULTRON_BUILD_PROMPT.md).
 | 4. Real-time: hands-free, barge-in, echo cancellation, early start | ✅ built; 700 ms target not met (see [Latency](#latency)) |
 | 5. Wake word: trained "Ultron" detector, sleep/wake, launchd | ✅ built; not yet tested on the owner's voice; service not installed |
 | 6. Brains: tools, risky tools with confirmation, hand-off, escalation, memory, MCP | ✅ built; spoken confirmation tested in unit tests, not yet live |
-| 7. Optimise: local-model experiment for practical turns, buffers | planned |
+| 7. Optimise: local model for practical turns, buffers | 🔶 in progress: local model built and on by default (see [Latency](#latency)) |
 | 8. Polish: tray indicator, Linux, install docs | planned |
 
 Linux support is deferred. The code has platform seams for it, but only the macOS side is built.
@@ -28,7 +28,8 @@ Linux support is deferred. The code has platform seams for it, but only the macO
 
 Requirements: macOS on Apple Silicon, Python 3.13, [uv](https://docs.astral.sh/uv/)
 (`brew install uv`), plus API keys for Anthropic, Cartesia (a paid plan; the free tier runs out
-quickly) and Deepgram.
+quickly) and Deepgram. The local model for practical turns (Qwen3.5-4B, 3 GB) downloads from
+Hugging Face on first run; set `llm.local_model = ""` to skip it.
 
 ```bash
 uv sync
@@ -79,8 +80,19 @@ speaker ◄─ FX ◄─ resample/varispeed ◄─ Cartesia (websocket) ◄─ c
   time is stamped on each user message so the cached prefix stays byte-identical. History
   trimming, tool loop, checkpoint and rollback for speculative turns, and history repair when a
   turn is cancelled.
-- **Routing** ([router.py](src/ultron/router.py)): a microsecond regex picks Haiku for practical
-  requests and Sonnet for conversation.
+- **Routing** ([router.py](src/ultron/router.py)): a microsecond regex picks the fast path for
+  practical requests and Sonnet for conversation.
+- **Local model** ([local_llm.py](src/ultron/backends/local_llm.py)): practical turns run on
+  Qwen3.5-4B (4-bit, MLX) on the Mac's GPU instead of Haiku. No network round trip, so the
+  first token arrives ~75 ms after the request.
+  - It gets a compact prompt (identity, speech rules, tools). Anything harder, it hands to Sonnet
+    through `escalate`.
+  - The prompt is prefilled once at startup. After each turn the conversation is prefilled in the
+    background, so the next turn only processes its own words.
+  - Its turns go into the same history as Claude's, so the two can alternate within one
+    conversation.
+  - On local turns the filler line waits 1 s and only plays for slow tools, so it never delays a
+    fast answer.
 - **Persona** ([persona.py](src/ultron/persona.py)): a reasoned worldview offset by a sincere
   love of art and ideas, with intensity `menace_level` 0–3. "Ultron, plain mode" drops the
   theatrics without changing the cached prompt.
@@ -141,12 +153,26 @@ speech to the first audible sample.
 | Cartesia first audio byte | ≤ 200 ms | 83–106 ms |
 | Output buffering | ≤ 50 ms | ~38 ms built-in speakers, ~180 ms Bluetooth |
 | Barge-in: Ultron stops | ≤ 150 ms | ~140 ms (estimated from parts) |
-| **Voice-to-voice, Haiku turns** | **≤ 700 ms** | **~1.3–1.4 s** |
-| Voice-to-voice, Sonnet turns | — | ~1.7–1.9 s |
-| First sound on tool turns (filler) | ~700 ms | ~765 ms |
+| **Voice-to-voice, local model, no tool** | **≤ 700 ms** | **~550–790 ms** |
+| Voice-to-voice, local model, with a tool | — | ~1.0–1.7 s |
+| Voice-to-voice, Sonnet turns | — | ~1.5–2.2 s |
 
-Claude's time to first token is the floor. A local model for practical turns is the planned
-Milestone 7 experiment.
+Milestone 7, practical turns, local model vs Haiku (same session, 10 replayed turns each). The
+"answer" column is when the actual answer starts, ignoring filler lines:
+
+| Practical turns | First sound (p50) | Answer starts (p50) | Cost |
+|---|---|---|---|
+| Haiku (cloud) | ~880 ms (mostly a filler line) | ~1.9 s | ~$0.001 per turn |
+| Qwen3.5-4B (local) | ~1.1 s | **~1.1 s** | $0 |
+
+- Haiku's time to first token from Athens is ~600–830 ms whatever the prompt size. The local
+  model's is ~75 ms.
+- On tool turns the local model is slower than its first token suggests: writing out the tool
+  call takes ~0.4 s (~35 tokens at ~80 tokens/s), plus a second short pass to answer.
+- The local model costs ~3 GB of RAM and ~5 s at startup (loading plus prefilling the prompt).
+- It is less witty than Haiku, and it answers knowledge questions it should escalate with
+  confident errors. That's why open conversation never reaches it; the router sends those to
+  Sonnet.
 
 Wake word, on held-out data: 7 unseen voices and 2.1 h of real-world audio, at threshold 0.8:
 
@@ -167,7 +193,7 @@ Logs:
 Everything lives in [config.toml](config.toml). Platform overrides go in `config.macos.toml` and
 per-host overrides in `config.<hostname>.toml`. The main knobs:
 
-- `[llm]`: `routing` (hybrid / fast / strong), models, thinking, effort, cache TTL, history length
+- `[llm]`: `routing` (hybrid / fast / strong), models, `local_model` ("" = Haiku for practical turns), thinking, effort, cache TTL, history length
 - `[tts]`: voice, `speed`, `emotion`, `pitch_semitones`; `[fx]` for effect levels
 - `[stt]`: region (EU by default), turn-detection thresholds, `eager_eot_threshold`
 - `[audio]`: input and output device, Bluetooth-mic avoidance, `aec` (auto / on / off)
@@ -192,8 +218,8 @@ per-host overrides in `config.<hostname>.toml`. The main knobs:
 ## Development
 
 ```bash
-uv run pytest -q    # 169 tests, no network needed (the MCP test starts a local fixture server)
-uv run ultron bench-v2v --rounds 2    # end-to-end latency via the replay harness (uses APIs)
+uv run pytest -q    # 175 tests, no network needed (the MCP test starts a local fixture server)
+uv run ultron bench-v2v --rounds 2 --quiet    # end-to-end latency via the replay harness (uses APIs); --quiet plays silence
 ```
 
 The replay harness streams the WAVs in [tests/fixtures/utterances](tests/fixtures/utterances)

@@ -10,15 +10,17 @@ import asyncio
 import time
 from collections.abc import Awaitable, Callable
 from datetime import datetime
+from types import SimpleNamespace
 from typing import Any
 
 import httpx2
 from anthropic import AsyncAnthropic, DefaultAsyncHttpxClient
+from anthropic.types import TextBlock, ToolUseBlock
 
 from .config import Config, LLMConfig
 from .memory import Memory
 from .metrics import TurnMetrics
-from .persona import PLAIN_OFF, PLAIN_ON, build_system_prompt, detect_mode_switch
+from .persona import PLAIN_OFF, PLAIN_ON, build_local_prompt, build_system_prompt, detect_mode_switch
 from .pricing import usd
 from .router import route
 from .text import Chunker
@@ -32,6 +34,9 @@ ESCALATE = {
                    "Never for simple practical requests (time, timers, apps, volume, weather, files).",
     "input_schema": {"type": "object", "properties": {"reason": {"type": "string"}}, "additionalProperties": False},
 }
+
+LOCAL = "local"  # model name for turns on the local backend
+LOCAL_FILLER_DELAY_S = 1.0
 
 OnText = Callable[[str], None]
 OnEvent = Callable[[], None]
@@ -67,6 +72,25 @@ class Brain:
         self.plain = False
         self.menace = cfg.menace_level
         self._system = self._build_system()
+        self.local = None  # LocalLLM once warm() has loaded it
+        self._local_ready = False
+
+    def _make_local(self):
+        if not self.llm.local_model or self.llm.routing == "strong":
+            return None
+        try:
+            from .backends.local_llm import LocalLLM
+            import mlx_lm  # noqa: F401  (Apple Silicon only)
+        except ImportError:
+            return None
+        return LocalLLM(self.llm.local_model, self.llm.local_max_tokens)
+
+    def _local_prompt(self) -> str:
+        mem = self.memory.render() if self.memory is not None else ""
+        return build_local_prompt(self.menace, self.cfg.user_name, mem)
+
+    def _local_tools(self) -> list[dict[str, Any]]:
+        return [t for t in self.tools if "input_schema" in t]  # no server tools (web search)
 
     def refresh_tools(self) -> None:
         """Rebuild the tool list (after MCP servers registered theirs). Changes the cached prefix."""
@@ -106,6 +130,13 @@ class Brain:
     def set_menace(self, level: int) -> None:
         self.menace = level
         self._system = self._build_system()
+        if self._local_ready:
+            self._local_ready = False
+            asyncio.ensure_future(self._reload_local())
+
+    async def _reload_local(self) -> None:
+        await self.local.load(self._local_prompt(), self._local_tools())
+        self._local_ready = True
 
     def _params(self, model: str) -> dict[str, Any]:
         if self.llm.thinking == "adaptive":
@@ -131,23 +162,38 @@ class Brain:
 
     def model_for(self, text: str, tier: str | None = None) -> str:
         tier = tier or (route(text) if self.llm.routing == "hybrid" else self.llm.routing)
-        return self.llm.fast_model if tier == "fast" else self.llm.strong_model
+        if tier == "fast":
+            return LOCAL if self._local_ready else self.llm.fast_model
+        return self.llm.strong_model
 
     async def warm(self) -> float:
         """Open the connection and write the tools+system cache for every model in use (caches are
         per model). Returns elapsed ms."""
         t0 = time.perf_counter()
-        await asyncio.gather(*(
+        jobs = [
             self.client.messages.create(
                 **{**self._params(model), "max_tokens": 0},
                 messages=[{"role": "user", "content": "warmup"}],
             )
             for model in self._models()
-        ))
+        ]
+        if self.local is None:
+            self.local = self._make_local()
+        if self.local is not None and not self._local_ready:
+            jobs.append(self._reload_local())
+        await asyncio.gather(*jobs)
         return (time.perf_counter() - t0) * 1000
 
     async def close(self) -> None:
+        if self.local is not None:
+            self.local.close()
         await self.client.close()
+
+    def _sync_local(self) -> None:
+        # Prefill this turn into the local cache now, while the user is listening, not next turn.
+        if self._local_ready:
+            fut = self.local.sync(self.messages)
+            fut.add_done_callback(lambda f: f.exception())  # a failed sync only costs prefill time
 
     # -- turns ----------------------------------------------------------------------------------
 
@@ -279,17 +325,32 @@ class Brain:
                 m.mark("first_chunk")
                 on_chunk(c)
 
+        late: list[asyncio.TimerHandle] = []
+
+        def late_filler() -> None:
+            if "first_token" not in m.marks:
+                on_tool_start()
+
         def tool_block() -> None:
             if "first_token" not in m.marks and "tool_block" not in m.marks:
                 m.mark("tool_block")
-                on_tool_start()
+                if model == LOCAL:
+                    # The local model answers ~0.6 s after starting a call, and a filler line (1-3 s)
+                    # would delay that answer. Only cover slow tools, or an escalation to the cloud.
+                    late.append(asyncio.get_running_loop().call_later(LOCAL_FILLER_DELAY_S, late_filler))
+                else:
+                    on_tool_start()
 
         try:
             await self._turn(model, m, user_text, chunker, emit, speak, tool_block, on_text, tool_gate)
         except asyncio.CancelledError:
             self._repair()
             raise
+        finally:
+            for h in late:
+                h.cancel()
         m.mark("done")
+        self._sync_local()
         return m
 
     async def _turn(self, model, m, user_text, chunker, emit, speak, tool_block, on_text, tool_gate) -> None:
@@ -340,6 +401,8 @@ class Brain:
     async def _stream_once(
         self, model: str, m: TurnMetrics, rnd: int, emit: OnText, tool_block: OnEvent, no_tools: bool = False
     ):
+        if model == LOCAL:
+            return await self._stream_local(m, rnd, emit, tool_block, no_tools)
         t_req = time.perf_counter()
         m.mark("llm_request")
         ttft = None
@@ -384,6 +447,56 @@ class Brain:
             }
         )
         return final
+
+    async def _stream_local(self, m: TurnMetrics, rnd: int, emit: OnText, tool_block: OnEvent, no_tools: bool):
+        """One round on the local model, returned in the shape of an Anthropic message so the
+        tool loop and the history don't care which model answered."""
+        from .backends.local_llm import _OPEN, _STAMP, held_back, parse_calls
+
+        t_req = time.perf_counter()
+        m.mark("llm_request")
+        ttft = None
+        buf, sent, skip, call_at = "", 0, None, -1
+        async for delta in self.local.stream(self.messages):
+            if ttft is None:
+                ttft = (time.perf_counter() - t_req) * 1000
+            buf += delta
+            if call_at >= 0:
+                if "</tool_call>" in buf[call_at:]:
+                    break  # run the first call now; don't wait for the model to close its turn
+                continue
+            if skip is None:
+                head = buf.lstrip()
+                if head.startswith("[") and "]" not in head and len(head) < 40:
+                    continue  # maybe the echoed clock stamp: wait to see it whole
+                st = _STAMP.match(buf)
+                skip = sent = st.end() if st else len(buf) - len(buf.lstrip())
+            if (i := buf.find(_OPEN)) >= 0:
+                call_at = i
+                if buf[sent:i].strip():
+                    emit(buf[sent:i].rstrip())
+                tool_block()
+                continue
+            end = len(buf) - held_back(buf)
+            while end > sent and buf[end - 1].isspace():
+                end -= 1  # trailing space goes out with the next word, or not at all before a call
+            if end > sent:
+                emit(buf[sent:end])
+                sent = end
+        text_end = call_at if call_at >= 0 else len(buf)
+        if call_at < 0 and sent < text_end and skip is not None:
+            emit(buf[sent:text_end])
+        text = buf[skip or 0:text_end].strip()
+        calls = [] if no_tools else parse_calls(buf, self.local.tools)
+        content: list[Any] = [TextBlock(type="text", text=text)] if text else []
+        content += [ToolUseBlock(type="tool_use", id=f"toolu_local_{rnd}_{i}_{int(t_req * 1e6) % 10**9}",
+                                 name=c.name, input=c.args) for i, c in enumerate(calls)]
+        if not content:
+            content = [TextBlock(type="text", text="—")]
+        m.llm_calls.append({"round": rnd, "model": LOCAL, "ttft_ms": round(ttft, 1) if ttft is not None else None,
+                            "ms": round((time.perf_counter() - t_req) * 1000, 1), "input": 0, "cache_read": 0,
+                            "cache_write": 0, "output": len(buf), "usd": 0.0, "stop": "tool_use" if calls else "end_turn"})
+        return SimpleNamespace(content=content, stop_reason="tool_use" if calls else "end_turn")
 
     async def _run_tools(self, tool_uses: list, m: TurnMetrics, transcript: str) -> list[dict[str, Any]]:
         async def one(block) -> dict[str, Any]:

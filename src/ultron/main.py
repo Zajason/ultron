@@ -357,12 +357,14 @@ async def live(cfg: Config, wake: bool = False, daemon: bool = False) -> None:
         audit.close()
 
 
-async def bench_v2v(cfg: Config, rounds: int) -> None:
+async def bench_v2v(cfg: Config, rounds: int, quiet: bool = False) -> None:
     """Replay the recorded utterances through the full hands-free pipeline; time from the end of
     each utterance to Ultron's first audio at the speaker."""
     from .replay import ReplayMic, load_fixtures
 
     speaker = _build_speaker(cfg)
+    if quiet:
+        speaker.out.gain = 0.0
     brain, audit = _build(cfg, dry_run=True)  # the replayed requests must not really open apps or set timers
     await brain.warm()
     await _start_speaker(speaker, cfg)
@@ -370,7 +372,7 @@ async def bench_v2v(cfg: Config, rounds: int) -> None:
     eager = cfg.stt.eager_eot_threshold > 0
     convo = Conversation(brain, speaker, mic, DeepgramFlux(cfg.stt, _require("DEEPGRAM_API_KEY")),
                          _vad(cfg, mic), None, eager, cfg.stt.frame_ms)
-    rows: dict[str, list[float]] = {k: [] for k in ("eager", "end", "req", "ttft", "tts", "v2v", "v2v_haiku", "v2v_sonnet")}
+    rows: dict[str, list[float]] = {k: [] for k in ("eager", "end", "req", "ttft", "tts", "v2v", "v2v_local", "v2v_haiku", "v2v_sonnet")}
     spec = 0
     run = asyncio.create_task(convo.run())
     await asyncio.sleep(1.0)
@@ -399,7 +401,7 @@ async def bench_v2v(cfg: Config, rounds: int) -> None:
                     continue
                 v2v = fa + shift
                 rows["v2v"].append(v2v)
-                rows["v2v_haiku" if "haiku" in m.model else "v2v_sonnet"].append(v2v)
+                rows["v2v_" + next((k for k in ("local", "haiku") if k in m.model), "sonnet")].append(v2v)
                 for key, mark in (("ttft", "first_token"), ("eager", "eager_event"), ("end", "end_event"),
                                   ("req", "llm_request"), ("tts", "tts_first_byte")):
                     if mark in m.marks:
@@ -421,7 +423,7 @@ async def bench_v2v(cfg: Config, rounds: int) -> None:
     _table(n, [("speech end -> EagerEndOfTurn", rows["eager"]), ("speech end -> EndOfTurn", rows["end"]),
                ("speech end -> LLM request", rows["req"]), ("speech end -> first token", rows["ttft"]),
                ("speech end -> TTS first byte", rows["tts"]),
-               ("voice-to-voice (all)", rows["v2v"]), ("  haiku turns", rows["v2v_haiku"]),
+               ("voice-to-voice (all)", rows["v2v"]), ("  local turns", rows["v2v_local"]), ("  haiku turns", rows["v2v_haiku"]),
                ("  sonnet turns", rows["v2v_sonnet"])],
            f"early start {'on' if eager else 'off'}, {spec}/{n} speculative")
 
@@ -712,6 +714,7 @@ def main() -> None:
     bv = sub.add_parser("bench-v2v", help="voice-to-voice latency via the replay harness")
     bv.add_argument("--rounds", type=int, default=1)
     bv.add_argument("--no-eager", action="store_true", help="disable the early start on EagerEndOfTurn")
+    bv.add_argument("--quiet", action="store_true", help="play silence (same device timing, nothing audible)")
     tk = sub.add_parser("talk", help="push-to-talk voice conversation")
     tk.add_argument("--device", help="input device name (or part of it) or index; default: system input")
     mt = sub.add_parser("mic-test", help="record, play back and transcribe a few seconds of mic audio")
@@ -758,7 +761,7 @@ def main() -> None:
             case "bench-v2v":
                 if args.no_eager:
                     cfg = dataclasses.replace(cfg, stt=dataclasses.replace(cfg.stt, eager_eot_threshold=0.0))
-                asyncio.run(bench_v2v(cfg, args.rounds))
+                asyncio.run(bench_v2v(cfg, args.rounds, args.quiet))
             case "talk":
                 _require("ANTHROPIC_API_KEY")
                 try:

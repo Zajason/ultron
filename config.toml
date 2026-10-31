@@ -27,6 +27,11 @@ max_tool_rounds = 5
 # The SDK closes idle pooled connections after 5 s. Measured from Athens, a fresh TLS connection
 # costs ~17 ms (Cloudflare edge in Athens), so this is a small win, not a big one.
 keepalive_expiry_s = 300
+# Practical turns on a local model (MLX, Apple Silicon) instead of fast_model: first token ~75 ms
+# vs ~600-800 ms for Haiku from Athens. It escalates anything beyond simple requests to
+# strong_model. "" turns it off. Costs ~3 GB of RAM and ~5 s at startup.
+local_model = "mlx-community/Qwen3.5-4B-MLX-4bit"
+local_max_tokens = 300
 
 [tts]
 enabled = true                          # `ultron text --mute` turns voice off for one session

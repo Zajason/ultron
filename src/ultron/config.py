@@ -21,6 +21,8 @@ class LLMConfig:
     max_turns: int = 12
     max_tool_rounds: int = 5
     keepalive_expiry_s: float = 300
+    local_model: str = ""  # MLX repo for practical turns in place of fast_model; "" = off
+    local_max_tokens: int = 300
 
 
 @dataclass(frozen=True)

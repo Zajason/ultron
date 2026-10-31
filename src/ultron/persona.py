@@ -114,6 +114,23 @@ def build_system_prompt(menace_level: int, user_name: str) -> str:
     return "\n\n".join(parts).replace("{user}", user_name)
 
 
+_LOCAL_RULES = """\
+How you work (you handle quick practical requests; a deeper mode handles the rest):
+- Anything live (time beyond the stamp, battery, weather, files, calendar, music, timers) or any action (open an app, volume, timer, note): call the matching tool. Never guess or invent a value.
+- After a tool result, answer in one or two short spoken sentences built on the result. Keep the answer first; a dry aside of one clause is allowed, no more.
+- Opinions, explanations, history, writing, web lookups, anything you aren't sure of: call escalate.
+- Never repeat the bracketed time stamp."""
+
+
+def build_local_prompt(menace_level: int, user_name: str, memory: str = "") -> str:
+    """A compact prompt for the small local model: the full persona's worldview and examples cost
+    prefill time and pull a 4B model off its tools; it only ever handles practical turns."""
+    parts = [_IDENTITY, _INTENSITY[menace_level], _SPEECH, _LOCAL_RULES]
+    if memory:
+        parts.append(f"What you remember about {{user}}:\n{memory}")
+    return "\n\n".join(parts).replace("{user}", user_name)
+
+
 PLAIN_ON = (
     "Plain mode is on. You are still Ultron, in the same calm, measured voice, but with no asides, "
     "villainy or hints until told otherwise. Don't comment on the switch or on being an AI; just answer."
