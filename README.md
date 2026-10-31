@@ -18,7 +18,7 @@ The full specification is in [ULTRON_BUILD_PROMPT.md](ULTRON_BUILD_PROMPT.md).
 | 3. Ears: mic, streaming STT, push-to-talk | ✅ done |
 | 4. Real-time: hands-free, barge-in, echo cancellation, early start | ✅ built; 700 ms target not met (see [Latency](#latency)) |
 | 5. Wake word: trained "Ultron" detector, sleep/wake, launchd | ✅ built; not yet tested on the owner's voice; service not installed |
-| 6. Brains: escalation, memory, MCP, risky tools, weather/search/media/files/calendar | next |
+| 6. Brains: tools, risky tools with confirmation, hand-off, escalation, memory, MCP | ✅ built; spoken confirmation tested in unit tests, not yet live |
 | 7. Optimise: local-model experiment for practical turns, buffers | planned |
 | 8. Polish: tray indicator, Linux, install docs | planned |
 
@@ -100,11 +100,32 @@ speaker ◄─ FX ◄─ resample/varispeed ◄─ Cartesia (websocket) ◄─ c
   to Deepgram. On detection the buffered audio is sent, and the first transcript must contain
   "Ultron" or Ultron goes back to sleep.
 - **Tools** ([tools/](src/ultron/tools)): tiers are enforced by the executor, not the prompt.
-  - Tier 0 (read) and tier 1 (low-risk) run automatically.
-  - Tier 2 asks for confirmation.
-  - Tier 3 is disabled.
-  - Every call goes to `~/.ultron/audit.jsonl`.
-  - Benches run tools in dry-run mode.
+  - **Tier 0, read** (runs on its own): time, system stats, timers, weather (Open-Meteo), web search
+    (Anthropic), search and read files (home folder only; credential files refused), calendar.
+  - **Tier 1, low-risk** (runs on its own, logged): open apps, volume, timers, notes, music
+    control, `remember` and `forget`, `hand_off`.
+  - **Tier 2, risky** (asks out loud first): `run_shell`, `write_file`, `move_file`.
+    - Ultron says what he's about to do and asks; your next sentence is the answer.
+    - "Yes", "go ahead" or "do it" approves. Anything else, or 20 s of silence, declines.
+    - Some shell commands are blocked no matter what you say: `sudo`, disk wiping,
+      `rm -rf` of home or root, `curl | sh`, power commands.
+  - **Tier 3, destructive**: `delete` moves to the Trash. It needs a spoken passphrase
+    (`tools.passphrase`) and is off by default.
+  - Every call goes to `~/.ultron/audit.jsonl`. Benches run tools in dry-run mode.
+- **Hand-off** (`hand_off`): for big jobs you'll want to read (research, plans, long documents),
+  Ultron writes a full prompt, puts it on the clipboard and brings the Claude or ChatGPT app to the
+  front. You paste and send it, so it's ordinary use of your subscription. Nothing inside the app is
+  automated; that would break both apps' terms.
+- **Escalation**: Haiku can hand the rest of a turn to Sonnet with an `escalate` tool; a filler
+  line covers the switch.
+- **Memory**: durable facts live in `~/.ultron/memory.md` (plain markdown, editable). Turns trimmed
+  from the rolling window are summarised by Haiku in the background. Both sit in a system block
+  after the cached persona, so they never invalidate the persona cache.
+- **MCP**: servers listed under `[[mcp.servers]]` in [config.toml](config.toml) (stdio or HTTP)
+  contribute their tools, behind the same tiers and audit log. There's a commented example in the
+  config.
+- **Cost**: every turn's cost in USD (tokens, cache writes, web searches) is in the turn log and on
+  the summary line. Typical turns cost $0.0002–$0.005.
 
 ## Latency
 
@@ -171,7 +192,7 @@ per-host overrides in `config.<hostname>.toml`. The main knobs:
 ## Development
 
 ```bash
-uv run pytest -q    # 132 tests, no network needed
+uv run pytest -q    # 169 tests, no network needed (the MCP test starts a local fixture server)
 uv run ultron bench-v2v --rounds 2    # end-to-end latency via the replay harness (uses APIs)
 ```
 
