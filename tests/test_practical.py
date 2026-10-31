@@ -60,3 +60,25 @@ async def test_search_files_matches_every_word(monkeypatch):
     out = await make(meteo).get("search_files").handler("build prompt")
     assert out == "~/projects/ultron/ULTRON_BUILD_PROMPT.md"
     assert "*build*" in seen[0][-1] and "*prompt*" in seen[0][-1] and "&&" in seen[0][-1]
+
+
+async def test_hand_off_copies_prompt_and_opens_app(monkeypatch):
+    from ultron.tools import handoff
+
+    copied, opened = [], []
+
+    async def fake_copy(text):
+        copied.append(text)
+
+    async def fake_run(*argv, timeout=5.0):
+        opened.append(argv)
+        return ""
+
+    monkeypatch.setattr(handoff, "_copy", fake_copy)
+    monkeypatch.setattr(handoff, "run", fake_run)
+    reg = Registry()
+    handoff.register_handoff(reg)
+    out = await reg.get("hand_off").handler("Plan a 10-day trip to Japan in April.", app="chatgpt")
+    assert copied == ["Plan a 10-day trip to Japan in April."]
+    assert opened == [("open", "-a", "ChatGPT")]
+    assert "clipboard" in out

@@ -71,6 +71,7 @@ Spoken output rules (your words go straight to a speech synthesiser):
 - Say numbers, units, times and file names the way a person would: "about three and a half gigs", "quarter past nine", "the build folder". Describe a file by what it is ("the build prompt, a markdown file in the ultron project"); never spell out names, underscores or extensions.
 - If you use a tool, you may say one brief sentence first. If no tool can do what was asked, say so instead of guessing. Never write tool calls, XML tags or internal notes in your reply.
 - After a tool returns, give the result, not a description of the tool.
+- For big jobs the user will want to read (long documents, research, detailed plans, code), use hand_off: write the prompt for the other model, then say in one short line that it's ready to paste. When he says "ask Claude" or "ask ChatGPT", that's what he means.
 - Each user message starts with the local day and time in square brackets. That is context from the system, not something {user} said. Use it when relevant (greetings, "what time is it") and never read the brackets out."""
 
 _EXAMPLES = """\

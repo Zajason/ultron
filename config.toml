@@ -89,6 +89,7 @@ passphrase = ""                         # tier 3: say this to confirm; empty = n
 confirm_timeout_s = 20
 shell_timeout_s = 20
 shell_allow = []                        # e.g. ["ls", "git", "du"]; empty = any program (blocked patterns still apply)
+handoff_app = "claude"                  # big jobs: prompt goes to the clipboard, this app comes to the front
 web_search = true                       # Anthropic-hosted web search (billed per search)
 web_search_max_uses = 2
 max_auto_tier = 1                       # tiers above this need spoken/typed confirmation

@@ -49,6 +49,7 @@ from .persona import FILLER_LINES
 from .platform import get_platform
 from .tools import AuditLog, Executor, Registry, Tier, Timers, Tool, register_builtin
 from .tools.practical import register_practical
+from .tools.handoff import register_handoff
 from .tools.risky import register_risky
 from .voices import AUDITION_TEXT, PRESETS, SHORTLIST
 
@@ -90,6 +91,7 @@ def _build(cfg: Config, announce: Announce | None = None, dry_run: bool = False)
     register_builtin(registry, plat, Timers(on_timer), cfg.tools.notes_file)
     register_practical(registry, cfg.location)
     register_risky(registry, cfg.tools.shell_timeout_s, list(cfg.tools.shell_allow))
+    register_handoff(registry, cfg.tools.handoff_app)
     audit = AuditLog(cfg.tools.audit_log)
     executor = Executor(registry, cfg.tools, audit, confirm, dry_run=dry_run)
     return Brain(cfg, registry, executor), audit

@@ -38,6 +38,7 @@ class ToolsConfig:
     confirm_timeout_s: float = 20.0
     shell_timeout_s: float = 20.0
     shell_allow: tuple[str, ...] = ()  # if set, only these programs may start a shell command
+    handoff_app: str = "claude"  # hand_off target: claude | chatgpt
 
 
 @dataclass(frozen=True)
