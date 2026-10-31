@@ -37,6 +37,7 @@ ESCALATE = {
 
 LOCAL = "local"  # model name for turns on the local backend
 LOCAL_FILLER_DELAY_S = 1.0
+FOLLOW_UP_S = 120  # a turn this soon after a strong-model turn counts as part of that conversation
 
 OnText = Callable[[str], None]
 OnEvent = Callable[[], None]
@@ -73,6 +74,8 @@ class Brain:
         self.menace = cfg.menace_level
         self._system = self._build_system()
         self.local = None  # LocalLLM once warm() has loaded it
+        self._last_tier: str | None = None  # of the previous turn, for follow-ups
+        self._last_turn_at = 0.0
         self._local_ready = False
 
     def _make_local(self):
@@ -161,7 +164,10 @@ class Brain:
         return [self.llm.fast_model] * (r != "strong") + [self.llm.strong_model] * (r != "fast")
 
     def model_for(self, text: str, tier: str | None = None) -> str:
-        tier = tier or (route(text) if self.llm.routing == "hybrid" else self.llm.routing)
+        if tier is None and self.llm.routing == "hybrid":
+            recent = time.perf_counter() - self._last_turn_at < FOLLOW_UP_S
+            tier = route(text, self._last_tier if recent else None)
+        tier = tier or self.llm.routing
         if tier == "fast":
             return LOCAL if self._local_ready else self.llm.fast_model
         return self.llm.strong_model
@@ -199,6 +205,7 @@ class Brain:
 
     def reset(self) -> None:
         self.messages.clear()
+        self._last_tier = None
         self.plain = False
         self.summary = ""
 
@@ -350,6 +357,8 @@ class Brain:
             for h in late:
                 h.cancel()
         m.mark("done")
+        self._last_tier = "strong" if m.model == self.llm.strong_model else "fast"
+        self._last_turn_at = time.perf_counter()
         self._sync_local()
         return m
 

@@ -322,7 +322,7 @@ async def live(cfg: Config, wake: bool = False, daemon: bool = False) -> None:
         ui.wake = wake_with_chime
     convo = Conversation(brain, speaker, mic, DeepgramFlux(cfg.stt, _require("DEEPGRAM_API_KEY")),
                          _vad(cfg, mic), aec, eager, cfg.stt.frame_ms, TurnLog(cfg.turns_log), ui,
-                         wake=detector, idle_sleep_s=cfg.wake.idle_sleep_s,
+                         wake=detector, idle_sleep_s=cfg.wake.idle_sleep_s, follow_up_s=cfg.wake.follow_up_s,
                          passphrase=cfg.tools.passphrase, confirm_timeout_s=cfg.tools.confirm_timeout_s)
     brain.executor.confirm = convo.confirm  # risky tools are confirmed out loud
 

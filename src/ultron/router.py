@@ -37,9 +37,13 @@ _SHORT = re.compile(
 )
 
 
-def route(text: str) -> str:
-    """'fast' or 'strong'."""
+def route(text: str, previous: str | None = None) -> str:
+    """'fast' or 'strong'. previous: the tier of the turn just before, if it was recent. A
+    follow-up in a conversation ("yes", "a to-do app", "why?") stays on the strong model; only a
+    clearly practical request leaves it."""
     t = text.strip()
-    if _SHORT.match(t) or _PRACTICAL.search(t):
+    if _PRACTICAL.search(t):
         return "fast"
-    return "strong"
+    if previous == "strong":
+        return "strong"
+    return "fast" if _SHORT.match(t) else "strong"

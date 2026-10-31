@@ -70,7 +70,8 @@ latency_ms = 5                          # buffer hint (mic and speakers); 5 ms: 
 [wake]                                  # `ultron live --wake`
 threshold = 0.8                         # detector score; held-out eval: 93.6% recall, 0.47 false wakes/hour (also verified by transcript)
 patience = 1                            # consecutive 80 ms frames above threshold
-idle_sleep_s = 10                       # back to sleep after this much silence
+idle_sleep_s = 10                       # woken but no request: back to sleep after this much silence
+follow_up_s = 30                        # after a reply: this long to follow up without saying his name
 chime = true                            # short tone when he wakes
 
 [vad]                                   # Silero, for barge-in

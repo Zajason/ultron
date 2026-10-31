@@ -51,3 +51,11 @@ def test_practical_goes_fast(text):
 @pytest.mark.parametrize("text", STRONG)
 def test_conversation_goes_strong(text):
     assert route(text) == "strong"
+
+
+def test_follow_ups_stay_with_the_strong_model():
+    assert route("yes", previous="strong") == "strong"
+    assert route("a to-do app", previous="strong") == "strong"
+    assert route("set a timer for five minutes", previous="strong") == "fast"
+    assert route("yes", previous="fast") == "fast"
+    assert route("yes") == "fast"

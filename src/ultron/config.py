@@ -77,6 +77,7 @@ class WakeConfig:
     threshold: float = 0.8
     patience: int = 1  # consecutive 80 ms frames above threshold
     idle_sleep_s: float = 10.0  # back to sleep after this long without speech or a reply
+    follow_up_s: float = 30.0  # after one of his replies: time for a follow-up without the wake word
     chime: bool = True
 
 

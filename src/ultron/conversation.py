@@ -33,7 +33,26 @@ from .wakeword import WakeWordDetector
 
 _YES_RE = re.compile(r"^\W*(yes|yeah|yep|yup|sure|ok(ay)?|do it|go ahead|proceed|confirm(ed)?|affirmative|please do)\b", re.I)
 
-_WAKE_RE = re.compile(r"\b(ultron|ul ?tron|ultra ?tron|altron)\b", re.I)
+# His name as speech-to-text writes it, mishearings included (Flux has turned a clear "Ultron."
+# into "Well drawn."): the detector already heard the name, this only confirms it.
+_WAKE_RE = re.compile(
+    r"\b(ultron|ultra ?tron|altron|(ul|al|all|ol|el|well|hal|ull|old)[ -]?(tron|tran|trun|drawn|dron|trawn|tronn?))\b",
+    re.I)
+# Words that can sit around the name in a bare summons ("Hey Ultron?", "Okay, Ultron.").
+_SUMMON_FILLER = {"hey", "hi", "hello", "ok", "okay", "oh", "so", "um", "uh", "yo", "right", "well", "tron"}
+# Ending the conversation: he answers, then goes back to sleep without waiting out the timer.
+_DISMISS_RE = re.compile(
+    r"\b(that'?s (all|it|everything)|go (back )?to sleep|stop listening|(good ?bye|bye)( ultron)?|"
+    r"we'?re done|i'?m done|that will be all|dismissed)\b[\s.,!?]*(ultron)?[\s.,!?]*$", re.I)
+
+
+def is_summons(text: str) -> bool:
+    """Just his name (with a greeting at most): a call for attention, not a request. "Tron" alone
+    counts: the live stream after a wake starts with the tail of the name."""
+    if not _WAKE_RE.search(text) and _norm(text) != "tron":
+        return False
+    rest = _WAKE_RE.sub(" ", text.lower())
+    return all(w in _SUMMON_FILLER for w in re.findall(r"[a-z']+", rest))
 
 
 @dataclass
@@ -70,7 +89,7 @@ class Conversation:
     def __init__(self, brain: Brain, speaker: Speaker, mic: MicInput, stt: DeepgramFlux,
                  vad: SileroVAD, aec: EchoCanceller | None, eager: bool, frame_ms: int = 80,
                  turn_log: TurnLog | None = None, ui: UI | None = None,
-                 wake: WakeWordDetector | None = None, idle_sleep_s: float = 10.0,
+                 wake: WakeWordDetector | None = None, idle_sleep_s: float = 10.0, follow_up_s: float = 30.0,
                  passphrase: str = "", confirm_timeout_s: float = 20.0) -> None:
         self.brain, self.speaker, self.mic, self.stt = brain, speaker, mic, stt
         self.vad, self.aec, self.eager = vad, aec, eager
@@ -88,11 +107,17 @@ class Conversation:
         # follows "Ultron" (often in the same breath) reaches STT once we wake.
         self.wake = wake
         self.awake = wake is None
-        self.idle_sleep_s = idle_sleep_s
+        self.idle_sleep_s = idle_sleep_s  # quiet after waking with no request
+        self.follow_up_s = follow_up_s  # quiet after one of his replies: time for a follow-up
+        self._talked = False  # a reply happened since waking: the follow-up window applies
+        self._dismissed = False  # the user ended the conversation: sleep once this reply is done
         self._verify = False  # first turn after a wake must actually contain the wake word
         self._last_activity = time.perf_counter()
         self._ring = np.zeros(0, np.float32)
         self._stream_ready = asyncio.Event()
+        self._streaming = asyncio.Event()  # awake and the backlog is sent: live audio may follow
+        self._waking: asyncio.Task | None = None
+        self._verified: asyncio.Task | None = None  # did the name check pass (after a wake)
         self.false_wakes = 0
         # Spoken confirmation for risky tools: the next finished turn is the answer, not a request.
         self.passphrase = passphrase
@@ -131,20 +156,49 @@ class Conversation:
             with contextlib.suppress(Exception):
                 await stream.close()
 
-    async def _wake_up(self, score: float) -> None:
+    def _wake_up(self, score: float) -> None:
         self.ui.wake(score)
         self.awake = True
         self._verify = True
+        self._talked = self._dismissed = False
         self._last_activity = time.perf_counter()
+        # The name is checked on its own clip, in one quick request, while the live stream starts
+        # with only the last 0.3 s. Replaying the whole 1.5 s into the live stream left Flux
+        # ~1.7 s behind real time, catching up only slowly (measured).
+        rate = self.mic.out_rate
+        self._verified = asyncio.create_task(self._check_name(self._ring[-int(1.5 * rate):].copy()))
+        # Connect in the background (~200 ms): the audio loop keeps running and holds new audio
+        # until the stream is ready, instead of stalling.
+        self._waking = asyncio.create_task(self._connect_with_backlog(self._ring[-int(0.3 * rate):].copy()))
+
+    async def _check_name(self, clip: np.ndarray) -> bool:
+        try:
+            heard = await self.stt.transcribe(to_linear16(clip))
+        except Exception as e:
+            self.ui.note(f"(couldn't check the wake word: {type(e).__name__}; trusting the detector)")
+            return True
+        if _WAKE_RE.search(heard):
+            self._verify = False
+            return True
+        self.ui.note(f"(not for me: {heard!r})")
+        if self.awake:
+            self._cancel_reply(rollback=True)
+            await self._go_to_sleep(false_wake=True)
+        return False
+
+    async def _connect_with_backlog(self, backlog: np.ndarray) -> None:
         await self._open_stream()
-        # Send the buffered audio first: "Ultron" itself (for verification) and whatever followed.
-        backlog = self._ring[-int(1.5 * self.mic.out_rate):]
+        # A short backlog: whatever followed the name in the same breath.
         for i in range(0, backlog.size, self.frame_samples):
             await self.stream.send(to_linear16(backlog[i : i + self.frame_samples]))
+        self._streaming.set()
 
     async def _go_to_sleep(self, false_wake: bool = False) -> None:
         self.awake = False
         self._verify = False
+        self._streaming.clear()
+        if self._waking is not None and not self._waking.done():
+            self._waking.cancel()
         if false_wake:
             self.false_wakes += 1
         await self._close_stream()
@@ -164,10 +218,11 @@ class Conversation:
                 self._ring = np.concatenate([self._ring, clean])[-2 * self.mic.out_rate :]
                 if not self.awake:
                     if (hit := self.wake.push(clean)) is not None:
-                        await self._wake_up(hit.score)
+                        self._wake_up(hit.score)
                         pending = np.zeros(0, np.float32)
                     continue
-                if self.reply is None and not self.vad.speaking and now - self._last_activity > self.idle_sleep_s:
+                idle = self.follow_up_s if self._talked else self.idle_sleep_s
+                if self.reply is None and not self.vad.speaking and now - self._last_activity > idle:
                     await self._go_to_sleep(false_wake=self._verify)
                     continue
             for ev in self.vad.process(clean, now):
@@ -176,6 +231,8 @@ class Conversation:
             if self.vad.speaking or self.reply is not None:
                 self._last_activity = now
             pending = np.concatenate([pending, clean])
+            if self.wake is not None and not self._streaming.is_set():
+                continue  # still connecting after a wake: hold the audio, it goes out right after
             while pending.size >= self.frame_samples:
                 await self.stream.send(to_linear16(pending[: self.frame_samples]))
                 pending = pending[self.frame_samples :]
@@ -223,14 +280,17 @@ class Conversation:
                 self.ui.heard(ev.transcript)
                 self._confirm.set_result(ev.transcript)
             return
-        if self._verify and ev.kind in ("eager", "end") and ev.transcript:
-            if not _WAKE_RE.search(ev.transcript):
-                if ev.kind == "end":  # the detector misfired: no reply, straight back to sleep
-                    self.ui.note(f"(not for me: {ev.transcript!r})")
-                    asyncio.create_task(self._go_to_sleep(false_wake=True))
-                return
+        if ev.kind == "end" and ev.transcript:
+            self._dismissed = bool(_DISMISS_RE.search(ev.transcript))
+        if ev.kind in ("eager", "end") and is_summons(ev.transcript):
+            # "Ultron." on its own, then a pause: he's being called, the request comes next.
             if ev.kind == "end":
+                if self.reply and self.reply.speculative and not self.reply.committed.is_set():
+                    self._cancel_reply(rollback=True)
                 self._verify = False
+                self._last_activity = time.perf_counter()
+                self.ui.note("(listening)")
+            return
         if ev.kind == "update" and ev.transcript:
             self.ui.partial(ev.transcript)
         elif ev.kind == "eager" and self.eager and ev.transcript:
@@ -320,6 +380,8 @@ class Conversation:
             self.turns_done += 1
 
     async def _reply_body(self, r: Reply) -> None:
+        if self._verified is not None and not await self._verified:
+            return  # a false wake: _check_name has already sent him back to sleep
         if self._cleanup is not None:
             await self._cleanup  # the previous reply's history repair must land first
         r.checkpoint = self.brain.checkpoint()
@@ -361,6 +423,11 @@ class Conversation:
         self.turns_done += 1
         if self.reply is r:
             self.reply = None
+        self._talked = True
+        self._last_activity = time.perf_counter()  # the follow-up window starts when he stops talking
+        if self._dismissed and self.wake is not None and self.awake:
+            self._dismissed = False
+            asyncio.create_task(self._go_to_sleep())
 
     def _cancel_reply(self, spoken: str = "", interrupted: bool = False, rollback: bool = False) -> None:
         r, self.reply = self.reply, None

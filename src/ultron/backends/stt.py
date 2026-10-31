@@ -86,6 +86,23 @@ class DeepgramFlux:
         env = DeepgramClientEnvironment(base=f"https://{host}", production=f"wss://{host}",
                                         agent="wss://agent.deepgram.com", agent_rest="https://agent.deepgram.com")
         self._client = AsyncDeepgramClient(api_key=api_key, environment=env)
+        self._key, self._host = api_key, host
+        self._http = None
+
+    async def transcribe(self, pcm16: bytes, model: str = "nova-3") -> str:
+        """One short clip, transcribed in one request (~110-270 ms from Athens). Used to check the
+        wake word without replaying that audio into the live stream, which would leave Flux
+        running behind real time for many seconds afterwards."""
+        import httpx
+        if self._http is None:
+            self._http = httpx.AsyncClient(timeout=httpx.Timeout(3.0, connect=2.0))
+        params = {"model": model, "encoding": "linear16", "sample_rate": self.cfg.sample_rate}
+        if self.cfg.keyterms:
+            params["keyterm"] = list(self.cfg.keyterms)
+        r = await self._http.post(f"https://{self._host}/v1/listen", params=params, content=pcm16,
+                                  headers={"Authorization": f"Token {self._key}", "Content-Type": "application/octet-stream"})
+        r.raise_for_status()
+        return r.json()["results"]["channels"][0]["alternatives"][0]["transcript"]
 
     async def open(self, ptt: bool = False) -> FluxStream:
         """ptt=True: only ForceEndTurn ends a turn, so Flux never cuts the user off mid-word."""

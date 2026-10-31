@@ -45,7 +45,7 @@ The first run asks for microphone access for your terminal app.
 | Command | What it does |
 |---|---|
 | `ultron live` | Hands-free conversation: talk any time; speak over him to interrupt |
-| `ultron live --wake` | Sleeps until it hears "Ultron"; sleeps again after 10 s of quiet |
+| `ultron live --wake` | Sleeps until it hears "Ultron". Follow-ups need no name for 30 s after each reply; "that's all" or "go to sleep" ends it |
 | `ultron talk` | Push-to-talk: Enter to start, Enter to send |
 | `ultron text [--mute]` | Typed chat, spoken aloud unless muted. `/menace 0-3`, `/reset`, `/quit` |
 | `ultron mic-test` | Records 4 s, plays it back, transcribes it (device, level, STT) |
@@ -109,8 +109,18 @@ speaker ◄─ FX ◄─ resample/varispeed ◄─ Cartesia (websocket) ◄─ c
   - 22 filler lines are pre-rendered and play when a tool call starts before any speech.
 - **Wake word** ([wakeword.py](src/ultron/wakeword.py)): openWakeWord's frozen mel and
   speech-embedding models on onnxruntime, plus our own classifier. While asleep nothing is sent
-  to Deepgram. On detection the buffered audio is sent, and the first transcript must contain
-  "Ultron" or Ultron goes back to sleep.
+  to Deepgram.
+  - On detection, the last 1.5 s are transcribed in one quick request (~0.2 s) to confirm the
+    name was said; if not, he goes back to sleep.
+  - The live stream starts with only the last 0.3 s, so whatever follows the name in the same
+    breath still arrives. Replaying the whole buffer into the live stream used to leave
+    Deepgram ~1.7 s behind real time.
+  - "Ultron." on its own, then a pause, gets no reply: he just listens for the request.
+  - He stays awake for follow-ups: 30 s after each reply (`wake.follow_up_s`), no name needed.
+    "That's all", "go to sleep" or "goodbye" ends the conversation after his answer.
+  - Follow-ups stay with the model you were talking to. "Yes" or "a to-do app" after a Sonnet
+    question stays on Sonnet; only a clearly practical request (timer, volume, weather) goes to
+    the fast model.
 - **Tools** ([tools/](src/ultron/tools)): tiers are enforced by the executor, not the prompt.
   - **Tier 0, read** (runs on its own): time, system stats, timers, weather (Open-Meteo), web search
     (Anthropic), search and read files (home folder only; credential files refused), calendar.
@@ -230,7 +240,7 @@ per-host overrides in `config.<hostname>.toml`. The main knobs:
 ## Development
 
 ```bash
-uv run pytest -q    # 177 tests, no network needed (the MCP test starts a local fixture server)
+uv run pytest -q    # 182 tests, no network needed (the MCP test starts a local fixture server)
 uv run ultron bench-v2v --rounds 2 --quiet    # end-to-end latency via the replay harness (uses APIs); --quiet plays silence
 ```
 

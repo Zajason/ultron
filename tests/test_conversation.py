@@ -189,3 +189,47 @@ async def test_answering_does_not_barge_in(tmp_path):
     assert convo.reply is not None and out.cleared >= 1
     convo._confirm = None
     convo.reply = None
+
+
+def test_is_summons_only_for_a_bare_name():
+    from ultron.conversation import is_summons
+    for t in ["Ultron.", "Hey, Ultron?", "Okay Ultron", "ultron ultron"]:
+        assert is_summons(t), t
+    for t in ["Ultron, what time is it?", "What time is it?", "Ultron, hi there friend"]:
+        assert not is_summons(t), t
+
+
+async def test_bare_name_gets_no_reply_and_the_request_after_it_does(tmp_path):
+    convo, brain, client, speaker, out, done = make(tmp_path, [reply(text("Twenty past four."))])
+    convo._verify = True  # just woken
+    convo._on_turn(TurnEvent("eager", "Ultron.", 0.0, ""))
+    convo._on_turn(TurnEvent("end", "Ultron.", 0.0, "model"))
+    await settle()
+    assert convo.reply is None and not client.calls and not convo._verify
+    convo._on_turn(TurnEvent("end", "What time is it?", 0.0, "model"))  # no name needed now
+    await wait_turn(convo)
+    assert len(client.calls) == 1 and brain.messages[0]["content"].endswith("What time is it?")
+
+
+async def test_dismissal_sends_him_back_to_sleep_after_answering(tmp_path):
+    convo, brain, client, speaker, out, done = make(tmp_path, [reply(text("Until next time."))])
+    slept = []
+    convo.wake, convo.awake = object(), True
+
+    async def sleep(false_wake=False):
+        slept.append(false_wake)
+    convo._go_to_sleep = sleep
+    convo._on_turn(TurnEvent("end", "Thanks, that's all.", 0.0, "model"))
+    await wait_turn(convo)
+    await settle()
+    assert slept == [False] and convo._talked
+
+
+async def test_follow_up_stays_awake_without_dismissal(tmp_path):
+    convo, brain, client, speaker, out, done = make(tmp_path, [reply(text("What kind of app?"))])
+    convo.wake, convo.awake = object(), True
+    convo._go_to_sleep = None  # must not be called
+    convo._on_turn(TurnEvent("end", "I want you to create an app.", 0.0, "model"))
+    await wait_turn(convo)
+    await settle()
+    assert convo._talked and convo.awake
