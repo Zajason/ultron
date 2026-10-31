@@ -42,6 +42,10 @@ class ToolsConfig:
     shell_timeout_s: float = 20.0
     shell_allow: tuple[str, ...] = ()  # if set, only these programs may start a shell command
     handoff_app: str = "claude"  # hand_off target: claude | chatgpt
+    code_root: Path = Path("~/projects")  # Claude Code jobs work in <code_root>/<project>
+    claude_path: str = "claude"
+    code_allowed_tools: tuple[str, ...] = ()  # shell commands Claude Code may run, e.g. "Bash(npm install:*)"
+    code_timeout_min: float = 60
 
 
 @dataclass(frozen=True)

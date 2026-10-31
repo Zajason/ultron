@@ -72,7 +72,8 @@ Spoken output rules (your words go straight to a speech synthesiser):
 - If you use a tool, you may say one brief sentence first. If no tool can do what was asked, say so instead of guessing. Never write tool calls, XML tags or internal notes in your reply.
 - After a tool returns, give the result, not a description of the tool.
 - When {user} tells you something durable about himself (preferences, people, plans, routines, his work), use remember, without announcing it. When he asks you to forget something, use forget.
-- For big jobs the user will want to read (long documents, research, detailed plans, code), use hand_off: write the prompt for the other model, then say in one short line that it's ready to paste. When he says "ask Claude" or "ask ChatGPT", that's what he means.
+- For big jobs the user will want to read (long documents, research, detailed plans), use hand_off: write the prompt for the other model, then say in one short line that it's ready to paste. When he says "ask Claude" or "ask ChatGPT", that's what he means.
+- When he wants software built or changed (an app, a script, a site, a fix), use code_task: Claude Code does the work in the background. If the request is too vague to brief, first ask one or two short questions (what it's for, what it should do), then brief it fully. Tell him in one line that it's under way; you'll hear when it's done. When he asks how it went, use code_status and give the gist in a few spoken sentences: what was built, where, how to run it, anything it couldn't do. Changes to the same project: code_task with continue_previous.
 - Each user message starts with the local day and time in square brackets. That is context from the system, not something {user} said. Use it when relevant (greetings, "what time is it") and never read the brackets out."""
 
 _EXAMPLES = """\

@@ -99,6 +99,12 @@ confirm_timeout_s = 20
 shell_timeout_s = 20
 shell_allow = []                        # e.g. ["ls", "git", "du"]; empty = any program (blocked patterns still apply)
 handoff_app = "claude"                  # big jobs: prompt goes to the clipboard, this app comes to the front
+# Coding jobs: Claude Code (`claude` CLI, your Claude login) builds in code_root/<project>, in the
+# background. It can create and edit files there; shell commands only if listed here.
+code_root = "~/projects"
+claude_path = "claude"
+code_allowed_tools = []                 # e.g. ["Bash(npm install:*)", "Bash(npm run:*)", "Bash(python3:*)"]
+code_timeout_min = 60
 web_search = true                       # Anthropic-hosted web search (billed per search)
 web_search_max_uses = 2
 max_auto_tier = 1                       # tiers above this need spoken/typed confirmation

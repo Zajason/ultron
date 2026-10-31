@@ -50,6 +50,7 @@ from .persona import FILLER_LINES
 from .platform import get_platform
 from .tools import AuditLog, Executor, Registry, Tier, Timers, Tool, register_builtin
 from .tools.practical import register_practical
+from .tools.coding import CodeJob, CodeJobs, register_coding
 from .tools.handoff import register_handoff
 from .tools.mcp_client import MCPHub
 from .tools.risky import register_risky
@@ -94,6 +95,17 @@ def _build(cfg: Config, announce: Announce | None = None, dry_run: bool = False)
     register_practical(registry, cfg.location)
     register_risky(registry, cfg.tools.shell_timeout_s, list(cfg.tools.shell_allow))
     register_handoff(registry, cfg.tools.handoff_app)
+
+    async def on_code_done(job: CodeJob) -> None:
+        what = "finished" if job.status == "done" else "stopped with a problem"
+        print(f"\n{BOLD}🛠  Claude Code job {job.n} ({job.project}) {what} after {job.minutes():.0f} min{RESET}", flush=True)
+        await plat.notify("Ultron", f"Claude Code {what}: {job.project}")
+        if announce:
+            await announce(f"Claude Code has {what} on {job.project}. Ask me how it went.")
+
+    t = cfg.tools
+    register_coding(registry, CodeJobs(Path(t.code_root), t.claude_path, tuple(t.code_allowed_tools),
+                                       on_code_done, t.code_timeout_min * 60))
     memory = Memory(cfg.tools.memory_file)
     register_memory(registry, memory)
     audit = AuditLog(cfg.tools.audit_log)

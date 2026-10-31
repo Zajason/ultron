@@ -126,7 +126,7 @@ speaker ◄─ FX ◄─ resample/varispeed ◄─ Cartesia (websocket) ◄─ c
     (Anthropic), search and read files (home folder only; credential files refused), calendar.
   - **Tier 1, low-risk** (runs on its own, logged): open apps, volume, timers, notes, music
     control, `remember` and `forget`, `hand_off`.
-  - **Tier 2, risky** (asks out loud first): `run_shell`, `write_file`, `move_file`.
+  - **Tier 2, risky** (asks out loud first): `run_shell`, `write_file`, `move_file`, `code_task`.
     - Ultron says what he's about to do and asks; your next sentence is the answer.
     - "Yes", "go ahead" or "do it" approves. Anything else, or 20 s of silence, declines.
     - Some shell commands are blocked no matter what you say: `sudo`, disk wiping,
@@ -138,6 +138,16 @@ speaker ◄─ FX ◄─ resample/varispeed ◄─ Cartesia (websocket) ◄─ c
   Ultron writes a full prompt, puts it on the clipboard and brings the Claude or ChatGPT app to the
   front. You paste and send it, so it's ordinary use of your subscription. Nothing inside the app is
   automated; that would break both apps' terms.
+- **Coding jobs** (`code_task`, `code_status`): "build me an app" goes to Claude Code (the `claude`
+  CLI, on your own Claude login) in `~/projects/<project>`.
+  - If the request is vague, Ultron first asks what it's for. Then he writes a full brief, asks
+    you to confirm the folder, and Claude Code works in the background while you keep talking.
+  - When the job finishes he says so; "how did it go?" gets the gist of Claude Code's report.
+  - Follow-ups ("make the buttons blue") continue the same Claude Code session.
+  - Claude Code may create and edit files in that folder. It runs no shell commands unless they're
+    listed in `tools.code_allowed_tools`.
+  - Needs Claude Code installed: `curl -fsSL https://claude.ai/install.sh | bash`, then `claude`
+    once to sign in.
 - **Escalation**: Haiku can hand the rest of a turn to Sonnet with an `escalate` tool; a filler
   line covers the switch.
 - **Memory**: durable facts live in `~/.ultron/memory.md` (plain markdown, editable). Turns trimmed
@@ -240,7 +250,7 @@ per-host overrides in `config.<hostname>.toml`. The main knobs:
 ## Development
 
 ```bash
-uv run pytest -q    # 182 tests, no network needed (the MCP test starts a local fixture server)
+uv run pytest -q    # 187 tests, no network needed (the MCP test starts a local fixture server)
 uv run ultron bench-v2v --rounds 2 --quiet    # end-to-end latency via the replay harness (uses APIs); --quiet plays silence
 ```
 
