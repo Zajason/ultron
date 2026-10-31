@@ -55,6 +55,7 @@ class TTSConfig:
     emotion: str = ""
     ellipsis_ms: int = 400
     pitch_semitones: float = 0.0
+    first_chunk_words: int = 0  # >0: start speaking after this many words, before the first clause ends
 
 
 @dataclass(frozen=True)

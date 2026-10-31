@@ -312,7 +312,7 @@ class Brain:
             m.t0 = t0  # voice turns are timed from when the user stopped talking
         self._add_user(user_text)
         self._trim()
-        chunker = Chunker()
+        chunker = Chunker(first_max_words=self.cfg.tts.first_chunk_words)
 
         def emit(delta: str) -> None:
             m.mark("first_token")

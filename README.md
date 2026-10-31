@@ -19,7 +19,7 @@ The full specification is in [ULTRON_BUILD_PROMPT.md](ULTRON_BUILD_PROMPT.md).
 | 4. Real-time: hands-free, barge-in, echo cancellation, early start | ✅ built; 700 ms target not met (see [Latency](#latency)) |
 | 5. Wake word: trained "Ultron" detector, sleep/wake, launchd | ✅ built; not yet tested on the owner's voice; service not installed |
 | 6. Brains: tools, risky tools with confirmation, hand-off, escalation, memory, MCP | ✅ built; spoken confirmation tested in unit tests, not yet live |
-| 7. Optimise: local model for practical turns, buffers | 🔶 in progress: local model built and on by default (see [Latency](#latency)) |
+| 7. Optimise: local model for practical turns, buffers | ✅ done (see [Latency](#latency)); early first chunk awaits a listening check |
 | 8. Polish: tray indicator, Linux, install docs | planned |
 
 Linux support is deferred. The code has platform seams for it, but only the macOS side is built.
@@ -174,6 +174,18 @@ Milestone 7, practical turns, local model vs Haiku (same session, 10 replayed tu
   confident errors. That's why open conversation never reaches it; the router sends those to
   Sonnet.
 
+Buffer tuning (Milestone 7). All measured without sound: benches run with `--quiet`.
+
+| Buffer | Tried | Result |
+|---|---|---|
+| Audio frames to Deepgram | 80 → 40 / 20 ms | No earlier end of turn (p50 170 / 213 / 217 ms); worse tail. Kept 80 ms |
+| Output and mic buffer hint | 10 → 5 / 2 ms | No dropouts at either, even while the local model generates. Now 5 ms (saves ~5 ms) |
+| First text chunk to TTS | whole first clause → first 4 words | ~70 ms less from first token to first audio (p50 v2v: local 1095 → 980 ms, Sonnet 1756 → 1475 ms). Off by default (`tts.first_chunk_words`) until checked by ear |
+
+The STT replay harness used to send each frame before its audio had finished being spoken, which
+made its end-of-turn times look up to one frame (80 ms) better than a live mic. That's fixed; the
+voice-to-voice bench was never affected.
+
 Wake word, on held-out data: 7 unseen voices and 2.1 h of real-world audio, at threshold 0.8:
 
 | Measure | Result |
@@ -194,7 +206,7 @@ Everything lives in [config.toml](config.toml). Platform overrides go in `config
 per-host overrides in `config.<hostname>.toml`. The main knobs:
 
 - `[llm]`: `routing` (hybrid / fast / strong), models, `local_model` ("" = Haiku for practical turns), thinking, effort, cache TTL, history length
-- `[tts]`: voice, `speed`, `emotion`, `pitch_semitones`; `[fx]` for effect levels
+- `[tts]`: voice, `speed`, `emotion`, `pitch_semitones`, `first_chunk_words`; `[fx]` for effect levels
 - `[stt]`: region (EU by default), turn-detection thresholds, `eager_eot_threshold`
 - `[audio]`: input and output device, Bluetooth-mic avoidance, `aec` (auto / on / off)
 - `[vad]`, `[wake]` (threshold, idle sleep, chime), `[tools]` (tiers, timeouts)
@@ -218,7 +230,7 @@ per-host overrides in `config.<hostname>.toml`. The main knobs:
 ## Development
 
 ```bash
-uv run pytest -q    # 175 tests, no network needed (the MCP test starts a local fixture server)
+uv run pytest -q    # 177 tests, no network needed (the MCP test starts a local fixture server)
 uv run ultron bench-v2v --rounds 2 --quiet    # end-to-end latency via the replay harness (uses APIs); --quiet plays silence
 ```
 

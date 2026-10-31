@@ -56,3 +56,15 @@ def test_long_text_without_punctuation_is_cut_at_space():
 def test_chunk_size_independent_of_delta_size():
     text = "One moment… Accessing it now. Patience, I'm working with human infrastructure. Done."
     assert run(text, step=1) == run(text, step=5) == run(text, step=len(text))
+
+
+def test_first_chunk_word_cap_starts_speech_early_only_once():
+    text = "The timer is set for ten minutes. Tea awaits, as do the rest of your obligations."
+    out = run(text, step=3, first_max_words=4)
+    assert out[0] == "The timer is set"
+    assert out[1] == "for ten minutes."
+    assert run(text, step=1, first_max_words=4) == out
+
+
+def test_first_chunk_word_cap_never_splits_a_short_sentence():
+    assert run("Done. Ten minutes.", step=1, first_max_words=4) == ["Done.", "Ten minutes."]

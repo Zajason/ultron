@@ -12,8 +12,10 @@ _ABBREV = {"mr", "mrs", "ms", "dr", "e.g", "i.e", "vs", "st", "approx"}
 
 
 class Chunker:
-    def __init__(self, first_min_chars: int = 12, clause_min_chars: int = 60, max_chars: int = 240) -> None:
+    def __init__(self, first_min_chars: int = 12, clause_min_chars: int = 60, max_chars: int = 240,
+                 first_max_words: int = 0) -> None:
         self.first_min = first_min_chars
+        self.first_max_words = first_max_words  # >0: cut the first chunk after this many words even mid-clause
         self.clause_min = clause_min_chars
         self.max_chars = max_chars
         self._buf = ""
@@ -57,6 +59,12 @@ class Chunker:
             elif c == "—" and n >= clause_min:
                 return n
             i += 1
+        if self.first_max_words and not self._emitted:
+            # Count only words followed by a space: the last one may still be growing.
+            words = buf.lstrip().split(" ")
+            if len(words) > self.first_max_words:
+                cut = len(buf) - len(buf.lstrip()) + len(" ".join(words[: self.first_max_words]))
+                return cut
         self._pos = max(0, len(buf) - 1)
         if len(buf) > self.max_chars:
             sp = buf.rfind(" ", 0, self.max_chars)

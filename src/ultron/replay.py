@@ -68,9 +68,10 @@ async def replay_one(stt: DeepgramFlux, name: str, expected: str, pcm: bytes, mo
         start = time.perf_counter()
         frames = [pcm[i : i + frame_bytes] for i in range(0, len(pcm), frame_bytes)]
         for i, frame in enumerate(frames):
-            await stream.send(frame)
+            # Like a live mic: a frame can only go out once its last sample has been spoken.
             await asyncio.sleep(max(0.0, start + (i + 1) * frame_ms / 1000 - time.perf_counter()))
-        t_speech_end = time.perf_counter()
+            await stream.send(frame)
+        t_speech_end = start + len(pcm) / 2 / sample_rate
 
         if mode == "ptt":
             await stream.end_turn()
