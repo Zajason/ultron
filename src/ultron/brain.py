@@ -23,6 +23,15 @@ from .router import route
 from .text import Chunker
 from .tools import Executor, Registry
 
+# Handled inside the brain, not by the executor: the rest of the turn runs on the strong model.
+ESCALATE = {
+    "name": "escalate",
+    "description": "Hand this request to your deeper reasoning mode before answering. Use it when the request "
+                   "needs multi-step reasoning, careful analysis, nuanced writing, judgement or deep knowledge. "
+                   "Never for simple practical requests (time, timers, apps, volume, weather, files).",
+    "input_schema": {"type": "object", "properties": {"reason": {"type": "string"}}, "additionalProperties": False},
+}
+
 OnText = Callable[[str], None]
 OnEvent = Callable[[], None]
 
@@ -52,6 +61,10 @@ class Brain:
             # Anthropic-hosted search. The basic variant: the dynamic-filtering one errors on Haiku 5.5
             # and took 13.8 s vs 4.5 s on Sonnet 5.5 (measured).
             self.tools.append({"type": "web_search_20250305", "name": "web_search", "max_uses": cfg.tools.web_search_max_uses})
+        if cfg.llm.routing == "hybrid":
+            # In both models' lists (same tool set, and history may contain the call): Haiku uses it,
+            # Sonnet is told it's already there.
+            self.tools.append(ESCALATE)
         self.messages: list[dict[str, Any]] = []
         self.plain = False
         self.menace = cfg.menace_level
@@ -255,7 +268,20 @@ class Brain:
             speak(chunker.flush())
             if tool_gate is not None:
                 await tool_gate()
-            self.messages.append({"role": "user", "content": await self._run_tools(tool_uses, m, user_text)})
+            results = {}
+            for blk in tool_uses:
+                if blk.name == "escalate":
+                    if model != self.llm.strong_model:
+                        model = m.model = self.llm.strong_model
+                        m.mark("escalated")
+                        note = "Handed to your deeper mode. Now answer the request fully, as yourself."
+                    else:
+                        note = "You are already at full depth. Answer directly."
+                    results[blk.id] = {"type": "tool_result", "tool_use_id": blk.id, "content": note}
+            others = [blk for blk in tool_uses if blk.name != "escalate"]
+            for r in await self._run_tools(others, m, user_text) if others else []:
+                results[r["tool_use_id"]] = r
+            self.messages.append({"role": "user", "content": [results[blk.id] for blk in tool_uses]})
 
         speak(chunker.flush())
 

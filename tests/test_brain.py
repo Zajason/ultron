@@ -184,3 +184,17 @@ async def test_no_filler_when_already_speaking(tmp_path):
     await brain.respond("what's the time", on_chunk=chunks.append, on_tool_start=lambda: fillers.append(1))
     assert fillers == []
     assert chunks == ["One moment.", "Noon."]  # pre-tool text flushed before the tool runs
+
+
+async def test_escalate_switches_the_rest_of_the_turn_to_the_strong_model(tmp_path):
+    brain, client = make_brain(tmp_path, [
+        reply(tool_use("e1", "escalate", {"reason": "needs analysis"}), stop="tool_use"),
+        reply(text("A considered answer.")),
+    ])
+    fillers = []
+    m = await brain.respond("set a timer, and also explain the halting problem", on_tool_start=lambda: fillers.append(1))
+    assert [c["model"] for c in client.calls] == ["claude-haiku-5-5", "claude-sonnet-5-5"]
+    assert m.model == "claude-sonnet-5-5" and "escalated" in m.marks
+    assert fillers == [1]  # the switch is covered by a filler line
+    assert brain.messages[2]["content"][0]["tool_use_id"] == "e1"
+    assert any(t.get("name") == "escalate" for t in client.calls[0]["tools"])
